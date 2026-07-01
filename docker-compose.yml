@@ -9,7 +9,20 @@ services:
       - redis_data:/data
     command: redis-server --appendonly yes --appendfsync everysec
     env_file:
-      - /mnt/secrets/.env
+      - .env
+
+  # Placeholder — will be built out in Phase 1
+  api:
+    build: ./api
+    container_name: nxlyr_api
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "8000:8000"
+    depends_on:
+      - redis
+    profiles:
+      - full
 
 volumes:
   redis_data:
