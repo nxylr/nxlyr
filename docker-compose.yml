@@ -1,0 +1,13 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: nxlyr_redis
+    restart: always
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --appendfsync everysec
+
+volumes:
+  redis_data:
