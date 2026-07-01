@@ -8,6 +8,8 @@ services:
     volumes:
       - redis_data:/data
     command: redis-server --appendonly yes --appendfsync everysec
+    env_file:
+      - /mnt/secrets/.env
 
 volumes:
   redis_data:
