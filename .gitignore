@@ -29,3 +29,10 @@ Thumbs.db
 *.log
 logs/
 !.env.template
+# Agent local files
+agent/keycheck/
+agent/LATENCY_RESULTS.md
+agent/*.mp3
+agent/test_tone.py
+agent/test_pipeline_timed.py
+agent/list_audio_devices.py
