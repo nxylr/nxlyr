@@ -1,4 +1,4 @@
-pipecat-ai[deepgram,openai,elevenlabs,silero]
-pipecat-flows
+pipecat-ai[deepgram,openai,elevenlabs,silero]==1.5.0
 python-dotenv
 requests
+aiohttp
