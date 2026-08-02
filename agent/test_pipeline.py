@@ -40,9 +40,15 @@ from pipecat.processors.aggregators.llm_response_universal import (
 )
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.services.deepgram.stt import DeepgramSTTService, DeepgramSTTSettings
-from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
+from pipecat.services.elevenlabs.tts import ElevenLabsTTSService, ElevenLabsTTSSettings
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.transports.local.audio import LocalAudioTransport, LocalAudioTransportParams
+from pipecat.turns.user_start import (
+    TranscriptionUserTurnStartStrategy,
+    VADUserTurnStartStrategy,
+)
+from pipecat.turns.user_turn_strategies import UserTurnStrategies
+from week2_latency_observer import make_week2_latency_observer
 
 logger.remove(0)
 logger.add(sys.stderr, level="DEBUG")
@@ -98,6 +104,8 @@ async def main():
         LocalAudioTransportParams(
             audio_in_enabled=True,
             audio_out_enabled=True,
+            # Match ElevenLabsTTSService(sample_rate=22050), which requests pcm_22050.
+            audio_out_sample_rate=22050,
         )
     )
 
@@ -106,17 +114,32 @@ async def main():
     # regardless of the value given) — it must go through settings= instead.
     stt = DeepgramSTTService(
         api_key=os.getenv("DEEPGRAM_API_KEY"),
-        settings=DeepgramSTTSettings(language="en-IN"),
+        settings=DeepgramSTTSettings(
+            model="nova-3",
+            language="en-IN",
+            smart_format=True,
+            interim_results=True,
+            endpointing=300,
+        ),
     )
 
     llm = OpenAILLMService(
         api_key=os.getenv("OPENAI_API_KEY"),
-        model="gpt-4o",
+        settings=OpenAILLMService.Settings(
+            model="gpt-4o",
+            max_tokens=160,
+            temperature=0.75,
+        ),
     )
 
     tts = ElevenLabsTTSService(
         api_key=os.getenv("ELEVENLABS_API_KEY"),
-        voice_id=os.getenv("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM"),
+        # Pipecat derives the ElevenLabs output_format from sample_rate: pcm_22050.
+        sample_rate=22050,
+        settings=ElevenLabsTTSSettings(
+            model="eleven_turbo_v2",
+            voice=os.getenv("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM"),
+        ),
     )
 
     context = LLMContext(
@@ -133,7 +156,17 @@ async def main():
     )
     context_aggregator = LLMContextAggregatorPair(
         context,
-        user_params=LLMUserAggregatorParams(vad_analyzer=SileroVADAnalyzer()),
+        user_params=LLMUserAggregatorParams(
+            vad_analyzer=SileroVADAnalyzer(),
+            # PipelineParams has no allow_interruptions field in Pipecat 1.5.0;
+            # interruption is controlled by these user-turn start strategies.
+            user_turn_strategies=UserTurnStrategies(
+                start=[
+                    VADUserTurnStartStrategy(enable_interruptions=False),
+                    TranscriptionUserTurnStartStrategy(enable_interruptions=False),
+                ]
+            ),
+        ),
     )
 
     pipeline = Pipeline(
@@ -149,9 +182,16 @@ async def main():
         ]
     )
 
+    latency_observer = make_week2_latency_observer("week2_latency.csv")
+
     task = PipelineTask(
         pipeline,
-        params=PipelineParams(allow_interruptions=False, enable_metrics=True),
+        params=PipelineParams(
+            audio_out_sample_rate=22050,
+            enable_metrics=True,
+            enable_usage_metrics=True,
+        ),
+        observers=[latency_observer],
     )
 
     runner = PipelineRunner()

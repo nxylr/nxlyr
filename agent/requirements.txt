@@ -1,0 +1,4 @@
+pipecat-ai[deepgram,openai,elevenlabs,silero]
+pipecat-flows
+python-dotenv
+requests
