@@ -18,6 +18,7 @@ import asyncio
 import os
 import sys
 
+import aiohttp
 from loguru import logger
 
 from dotenv import load_dotenv
@@ -40,7 +41,13 @@ from pipecat.processors.aggregators.llm_response_universal import (
 )
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.services.deepgram.stt import DeepgramSTTService, DeepgramSTTSettings
-from pipecat.services.elevenlabs.tts import ElevenLabsTTSService, ElevenLabsTTSSettings
+# Switched from ElevenLabsTTSService (WebSocket) to ElevenLabsHttpTTSService (HTTP):
+# on this Hetzner/Docker setup the websocket connection went unhealthy after the
+# first turn with no error logged (matches known Pipecat websocket-reconnect
+# issues), silently killing TTS for the rest of the run. HTTP is the Pipecat-docs
+# recommended fallback for "when WebSocket connections are not possible" and our
+# test has no interruption/word-timestamp needs that would require the websocket.
+from pipecat.services.elevenlabs.tts import ElevenLabsHttpTTSService, ElevenLabsHttpTTSSettings
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.transports.local.audio import LocalAudioTransport, LocalAudioTransportParams
 from pipecat.turns.user_start import (
@@ -104,7 +111,7 @@ async def main():
         LocalAudioTransportParams(
             audio_in_enabled=True,
             audio_out_enabled=True,
-            # Match ElevenLabsTTSService(sample_rate=22050), which requests pcm_22050.
+            # Match ElevenLabsHttpTTSService(sample_rate=22050), which requests pcm_22050.
             audio_out_sample_rate=22050,
         )
     )
@@ -132,75 +139,80 @@ async def main():
         ),
     )
 
-    tts = ElevenLabsTTSService(
-        api_key=os.getenv("ELEVENLABS_API_KEY"),
-        # Pipecat derives the ElevenLabs output_format from sample_rate: pcm_22050.
-        sample_rate=22050,
-        settings=ElevenLabsTTSSettings(
-            model="eleven_turbo_v2",
-            voice=os.getenv("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM"),
-        ),
-    )
-
-    context = LLMContext(
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "You are a friendly real estate pre-sales assistant for an "
-                    "Indian property developer. Keep replies short (1-2 sentences) "
-                    "and conversational, like a real phone call."
-                ),
-            }
-        ]
-    )
-    context_aggregator = LLMContextAggregatorPair(
-        context,
-        user_params=LLMUserAggregatorParams(
-            vad_analyzer=SileroVADAnalyzer(),
-            # PipelineParams has no allow_interruptions field in Pipecat 1.5.0;
-            # interruption is controlled by these user-turn start strategies.
-            user_turn_strategies=UserTurnStrategies(
-                start=[
-                    VADUserTurnStartStrategy(enable_interruptions=False),
-                    TranscriptionUserTurnStartStrategy(enable_interruptions=False),
-                ]
+    # ElevenLabsHttpTTSService requires an aiohttp session that we create and
+    # manage ourselves. It must stay open for as long as tts is in use, so
+    # everything from here through runner.run(task) lives inside this block.
+    async with aiohttp.ClientSession() as session:
+        tts = ElevenLabsHttpTTSService(
+            api_key=os.getenv("ELEVENLABS_API_KEY"),
+            aiohttp_session=session,
+            # Pipecat derives the ElevenLabs output_format from sample_rate: pcm_22050.
+            sample_rate=22050,
+            settings=ElevenLabsHttpTTSSettings(
+                model="eleven_turbo_v2",
+                voice=os.getenv("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM"),
             ),
-        ),
-    )
+        )
 
-    pipeline = Pipeline(
-        [
-            transport.input(),
-            MicGateDevOnly(),  # local-dev-only workaround, see class comment above
-            stt,
-            context_aggregator.user(),
-            llm,
-            tts,
-            transport.output(),
-            context_aggregator.assistant(),
-        ]
-    )
+        context = LLMContext(
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a friendly real estate pre-sales assistant for an "
+                        "Indian property developer. Keep replies short (1-2 sentences) "
+                        "and conversational, like a real phone call."
+                    ),
+                }
+            ]
+        )
+        context_aggregator = LLMContextAggregatorPair(
+            context,
+            user_params=LLMUserAggregatorParams(
+                vad_analyzer=SileroVADAnalyzer(),
+                # PipelineParams has no allow_interruptions field in Pipecat 1.5.0;
+                # interruption is controlled by these user-turn start strategies.
+                user_turn_strategies=UserTurnStrategies(
+                    start=[
+                        VADUserTurnStartStrategy(enable_interruptions=False),
+                        TranscriptionUserTurnStartStrategy(enable_interruptions=False),
+                    ]
+                ),
+            ),
+        )
 
-    latency_observer = make_week2_latency_observer("week2_latency.csv")
+        pipeline = Pipeline(
+            [
+                transport.input(),
+                MicGateDevOnly(),  # local-dev-only workaround, see class comment above
+                stt,
+                context_aggregator.user(),
+                llm,
+                tts,
+                transport.output(),
+                context_aggregator.assistant(),
+            ]
+        )
 
-    task = PipelineTask(
-        pipeline,
-        params=PipelineParams(
-            audio_out_sample_rate=22050,
-            enable_metrics=True,
-            enable_usage_metrics=True,
-        ),
-        observers=[latency_observer],
-    )
+        latency_observer = make_week2_latency_observer("week2_latency.csv")
 
-    runner = PipelineRunner()
+        task = PipelineTask(
+            pipeline,
+            params=PipelineParams(
+                audio_out_sample_rate=22050,
+                enable_metrics=True,
+                enable_usage_metrics=True,
+            ),
+            observers=[latency_observer],
+        )
 
-    # Kick off the conversation so the bot greets you first.
-    await task.queue_frame(LLMRunFrame())
+        runner = PipelineRunner()
 
-    logger.info("Pipeline starting — speak into your mic. Ctrl+C to stop.")
-    await runner.run(task)
+        # Kick off the conversation so the bot greets you first.
+        await task.queue_frame(LLMRunFrame())
+
+        logger.info("Pipeline starting — speak into your mic. Ctrl+C to stop.")
+        await runner.run(task)
 
 
 if __name__ == "__main__":
