@@ -29,6 +29,12 @@ Thumbs.db
 *.log
 logs/
 !.env.template
+# Local-only compose override — repoints env_file away from the Hetzner
+# /mnt/secrets path so the stack can run on a dev laptop. Committing it would
+# push a laptop-shaped config onto the deploy target.
+docker-compose.override.yml
+docker-compose.override.yaml
+
 # Agent local files
 agent/keycheck/
 agent/LATENCY_RESULTS.md

@@ -11,6 +11,21 @@ services:
     env_file:
       - /mnt/secrets/.env
 
+  # Pipecat telephony bot: Exotel media-stream WebSocket + outbound-call webhook.
+  agent:
+    build: ./agent
+    container_name: nxlyr_agent
+    restart: unless-stopped
+    env_file:
+      - /mnt/secrets/.env
+    ports:
+      # Loopback only, same as redis. /start will initiate real billable calls
+      # once Task 5.1 lands, so this must not be published publicly without auth
+      # in front of it — Exotel reaches /ws through a tunnel/proxy, not directly.
+      - "127.0.0.1:7860:7860"
+    depends_on:
+      - redis
+
   # Placeholder — will be built out in Phase 1
   api:
     build: ./api

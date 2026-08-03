@@ -1,0 +1,58 @@
+# Build context exclusions for agent/ (Week 3 / Task 2.5)
+#
+# The Dockerfile COPYs only four files by name, so nothing here could reach the
+# final image regardless. This file is about the *context* — everything not
+# excluded gets tarred up and shipped to the Docker daemon on every build. Two
+# reasons that matters: agent/venv is ~568 MB of dead weight, and agent/.env
+# holds live API keys that have no business crossing into the daemon at all.
+
+# --- Secrets. Keep this rule first; nothing below should ever override it. ---
+.env
+.env.*
+*.env
+
+# --- Virtualenv: ~568 MB, and Linux containers can't use a macOS venv anyway ---
+venv/
+
+# --- Python bytecode / packaging litter ---
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+
+# --- OS junk ---
+.DS_Store
+
+# --- Week 2 latency + diagnostic harness --------------------------------------
+# Superseded by the telephony server. week2_latency_observer.py is deliberately
+# NOT listed: bot.py imports it when NXLYR_LATENCY_CSV is set, so it ships.
+test_pipeline.py
+test_pipeline_timed.py
+test_tone.py
+turn_diagnostic.py
+analyze_week2.py
+backfill_ttfb.py
+stt_accuracy_test.py
+list_audio_devices.py
+check_dotenv.py
+entrypoint.sh
+wavs/
+keycheck/
+
+# --- Shell tooling: host/server inspection, never runs inside the container ---
+*.sh
+
+# --- Measurement output and scratch artifacts ---------------------------------
+# The .bak / .pre_sanity_check_backup suffixes sit *after* .csv, so a bare
+# *.csv rule misses them — hence the explicit trailing-suffix patterns.
+*.csv
+*.csv.*
+*.log
+*.bak
+snapshot_before.txt
+LATENCY_RESULTS.md
+
+# --- Docker's own files: no reason to ship them into their own build ---
+Dockerfile
+.dockerignore
