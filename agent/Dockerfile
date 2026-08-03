@@ -9,22 +9,26 @@
 
 FROM python:3.12-slim
 
-# libgomp1: kept as insurance for the native-extension stack, NOT because a
-#   failure was observed here. Debian slim ships no libgomp, and older
-#   onnxruntime builds link libgomp.so.1 — that combination is the classic
-#   "libgomp.so.1: cannot open shared object file" crash on first import, and
-#   it's what this guards against.
+# libgomp1: needed by numba's OpenMP threading backend, which Debian slim does
+#   not provide. Verified 2026-08-03 by running ldd across every native .so in
+#   the built amd64 image; exactly one links libgomp:
 #
-#   Measured 2026-08-03 against what we actually pin: onnxruntime 1.24.4 imports
-#   fine on bare python:3.12-slim with no libgomp1, on BOTH arm64 and amd64. So
-#   for onnxruntime specifically this package is currently redundant.
+#     numba/np/ufunc/omppool.cpython-312-x86_64-linux-gnu.so
 #
-#   It stays anyway, for 360 kB: the rest of the native stack (numba/llvmlite,
-#   scipy, resampy) has not been verified without it, and the amd64 deploy target
-#   has only ever been probed, never fully built. Revisit once the VPS build has
-#   run green — this is a cheap hedge, not a diagnosed requirement.
+#   numba is entirely transitive — pipecat-ai -> resampy~=0.4.3 -> numba>=0.53 —
+#   so nothing in our own imports hints that this dependency exists.
 #
-#   This is the only OS package the server needs; everything else in
+#   Do not drop this just because the build still succeeds without it. Missing
+#   libgomp does not crash numba: it catches the failed omppool load and quietly
+#   falls back to its "workqueue" threading layer. The failure mode is degraded
+#   resampling throughput showing up as call latency, with nothing in the logs
+#   to point at — considerably worse than a loud import error.
+#
+#   Recorded because this comment twice said otherwise: onnxruntime was the
+#   original suspect and it was wrong. onnxruntime 1.24.4 links no libgomp at
+#   all and imports cleanly without this package on both arm64 and amd64.
+#
+#   360 kB. This is the only OS package the server needs; everything else in
 #   requirements.txt installs from wheels.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libgomp1 \
