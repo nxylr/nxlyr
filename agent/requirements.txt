@@ -1,4 +1,12 @@
-pipecat-ai[deepgram,openai,elevenlabs,silero]==1.5.0
+pipecat-ai[deepgram,openai,elevenlabs,silero,websocket]==1.5.0
 python-dotenv
 requests
 aiohttp
+
+# fastapi arrives via the [websocket] extra above, but uvicorn does NOT — checked
+# against pipecat-ai 1.5.0's own METADATA, where uvicorn appears only under
+# `extra == "runner"`. We build the Exotel transport manually instead of going
+# through the runner's create_transport(), so we don't take the runner extra and
+# must pin uvicorn ourselves for server.py. (The `websockets` package is an
+# unconditional core dep of pipecat-ai, so it needs no line here.)
+uvicorn>=0.32.0,<1.0.0
