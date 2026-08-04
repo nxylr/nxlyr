@@ -42,3 +42,13 @@ agent/*.mp3
 agent/test_tone.py
 agent/test_pipeline_timed.py
 agent/list_audio_devices.py
+mock_*_out.wav
+verify_*_out.wav
+stereo_test_botonly.wav
+my_first_call_test.wav
+*_events.log
+latency_run.log
+snapshot_before.txt
+sanity_check_post_fixes*.csv
+network_latency_check.sh
+turn_diagnostic*
