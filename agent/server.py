@@ -24,6 +24,12 @@ from fastapi import FastAPI, WebSocket
 from fastapi.responses import JSONResponse
 from loguru import logger
 
+# Imported from starlette rather than fastapi. FastAPI re-exports this exact
+# class (the two names are the same object), but the exception is raised by
+# starlette's WebSocket.send, so importing it from the module that raises it
+# keeps the provenance obvious to anyone tracing the except clause below.
+from starlette.websockets import WebSocketDisconnect
+
 load_dotenv(override=True)
 
 # Imported at module scope, unlike the reference which imports bot inside the
@@ -98,11 +104,25 @@ async def websocket_endpoint(websocket: WebSocket):
         logger.exception("Call ended with an error")
     finally:
         # run_bot's transport usually closes the socket on its way out, and Exotel
-        # may have hung up first. Closing twice raises, and that's not worth
-        # surfacing as a 500.
+        # may have hung up first. Either way this close is redundant, and which
+        # exception it raises depends on who went first — neither is worth
+        # surfacing as a 500:
+        #
+        #   RuntimeError        — we already sent the close frame, so starlette
+        #                         refuses a second send (websockets.py:98).
+        #   WebSocketDisconnect — the peer vanished. uvicorn raises
+        #                         ClientDisconnected, an OSError, which starlette
+        #                         converts to WebSocketDisconnect(1006).
+        #
+        # Catching only RuntimeError covered the first case but not the second —
+        # which is the one that happens on every real call, since the carrier
+        # hangs up. Every normal call end therefore escaped this handler and
+        # uvicorn logged a ~40-line ASGI traceback at ERROR level. Harmless (it
+        # runs after the pipeline has already torn down) but it would bury real
+        # errors once call volume is real.
         try:
             await websocket.close()
-        except RuntimeError:
+        except (RuntimeError, WebSocketDisconnect):
             logger.debug("WebSocket was already closed")
 
 

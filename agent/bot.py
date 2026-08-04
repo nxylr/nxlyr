@@ -87,8 +87,11 @@ logger.add(sys.stderr, level=os.getenv("LOG_LEVEL", "DEBUG"))
 
 REQUIRED_ENV_VARS = ["DEEPGRAM_API_KEY", "OPENAI_API_KEY", "ELEVENLABS_API_KEY"]
 
-# Exotel streams 8 kHz mu-law-framed PCM. Everything downstream is pinned to the
-# same rate so no resampling happens between us and the carrier.
+# Exotel streams 8 kHz 16-bit signed little-endian mono PCM ("raw/slin"),
+# base64-encoded per media event — no mu-law/G.711 companding anywhere, unlike
+# the Twilio path (twilio.py:294 calls ulaw_to_pcm; exotel.py has no equivalent).
+# Everything downstream is pinned to the same rate so no resampling happens
+# between us and the carrier.
 EXOTEL_SAMPLE_RATE = 8000
 
 
