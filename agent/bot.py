@@ -33,6 +33,7 @@ Requires environment variables (see .env.template):
   OPENAI_API_KEY
   ELEVENLABS_API_KEY
   ELEVENLABS_VOICE_ID   (optional — defaults to a stock ElevenLabs voice)
+  ELEVENLABS_MODEL      (optional — defaults to eleven_turbo_v2)
   NXLYR_LATENCY_CSV     (optional — enables the Week 2 latency observer)
   LOG_LEVEL             (optional — defaults to DEBUG)
 """
@@ -189,7 +190,7 @@ async def run_bot(websocket: WebSocket) -> None:
             # audio leaves ElevenLabs already in the carrier's format.
             sample_rate=EXOTEL_SAMPLE_RATE,
             settings=ElevenLabsHttpTTSSettings(
-                model="eleven_turbo_v2",
+                model=os.getenv("ELEVENLABS_MODEL", "eleven_turbo_v2"),
                 voice=os.getenv("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM"),
             ),
         )
