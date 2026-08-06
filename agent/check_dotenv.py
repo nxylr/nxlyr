@@ -26,7 +26,7 @@ loaded = load_dotenv(dotenv_path=ENV_PATH, override=True)
 print(f".env parsed successfully: {loaded}")
 
 REQUIRED = ["DEEPGRAM_API_KEY", "OPENAI_API_KEY", "ELEVENLABS_API_KEY"]
-OPTIONAL = ["ELEVENLABS_VOICE_ID"]
+OPTIONAL = ["ELEVENLABS_VOICE_ID", "ELEVENLABS_MODEL"]
 
 print("\n-- Required keys --")
 all_present = True
