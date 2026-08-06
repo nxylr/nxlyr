@@ -213,10 +213,27 @@ async def run_bot(websocket: WebSocket) -> None:
                 vad_analyzer=SileroVADAnalyzer(),
                 # PipelineParams has no allow_interruptions field in Pipecat 1.5.0;
                 # interruption is controlled by these user-turn start strategies.
+                #
+                # enable_interruptions=True makes the aggregator broadcast an
+                # InterruptionFrame when a turn starts. That frame is a
+                # SystemFrame, so it bypasses processor queues and actually
+                # preempts work in flight rather than queueing behind it:
+                #   - every processor resets its process task, flushing frames
+                #     already queued (frame_processor._start_interruption)
+                #   - TTSService clears its aggregator, frame sequencer and
+                #     pending LLMFullResponseEnd frames
+                #   - the output transport drains queued audio, so buffered
+                #     speech is dropped instead of played out
+                #   - the assistant aggregator calls reset() *without*
+                #     push_aggregation(), so the interrupted reply is discarded
+                #     rather than committed to the context
+                # Both strategies are enabled: VAD is the fast path, and
+                # transcription is the fallback for a caller too quiet to trip
+                # VAD but still transcribed by Deepgram.
                 user_turn_strategies=UserTurnStrategies(
                     start=[
-                        VADUserTurnStartStrategy(enable_interruptions=False),
-                        TranscriptionUserTurnStartStrategy(enable_interruptions=False),
+                        VADUserTurnStartStrategy(enable_interruptions=True),
+                        TranscriptionUserTurnStartStrategy(enable_interruptions=True),
                     ]
                 ),
             ),
