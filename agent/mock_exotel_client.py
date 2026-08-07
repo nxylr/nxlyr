@@ -92,6 +92,7 @@ dependencies:
 """
 
 import argparse
+import array
 import asyncio
 import base64
 import contextlib
@@ -137,6 +138,16 @@ class CallState:
 
     # Bytes of bot audio attributable to each user turn, in order.
     turn_replies: list[int] = field(default_factory=list)
+
+    # --record-conversation only. Two mono tracks on a shared timeline whose
+    # origin is t0, i.e. the moment the socket connected. Left is what we sent,
+    # right is what the bot sent. Both stay empty unless recording is on, so a
+    # normal run pays nothing for this.
+    recording: bool = False
+    caller_track: bytearray = field(default_factory=bytearray)
+    bot_track: bytearray = field(default_factory=bytearray)
+    # Write cursor for bot_track, in bytes. See receive_loop for why.
+    bot_cursor: int = 0
 
     def elapsed(self) -> float:
         return time.monotonic() - self.t0
@@ -194,6 +205,59 @@ def write_wav_8k_mono(path: str, pcm: bytes) -> None:
         wav.writeframes(pcm)
 
 
+def splice_into_track(track: bytearray, offset: int, data: bytes) -> None:
+    """Place `data` at byte `offset`, zero-filling any gap before it.
+
+    Zero is digital silence for signed PCM, so padding a gap is literally
+    "nobody was speaking then" — which is the whole point of the stereo
+    recording. Grows the track as needed.
+    """
+    if len(track) < offset:
+        track.extend(b"\x00" * (offset - len(track)))
+
+    end = offset + len(data)
+    if len(track) < end:
+        track.extend(b"\x00" * (end - len(track)))
+
+    track[offset:end] = data
+
+
+def write_wav_8k_stereo(path: str, left: bytes, right: bytes) -> float:
+    """Interleave two mono tracks into one stereo WAV. Returns duration in seconds.
+
+    Left is the caller, right is the bot — the convention a telephony recording
+    uses, and it means listening on one earpiece gives you one side of the call.
+    Both are padded with silence to the same length first, so neither channel
+    ends early and the file length is the true call duration.
+    """
+    frames = max(len(left), len(right)) // SAMPLE_WIDTH
+    total = frames * SAMPLE_WIDTH
+
+    left_samples = array.array("h")
+    left_samples.frombytes(left[:total].ljust(total, b"\x00"))
+    right_samples = array.array("h")
+    right_samples.frombytes(right[:total].ljust(total, b"\x00"))
+
+    # array uses native byte order; the wire format and every other WAV we write
+    # is little-endian, so byteswap on a big-endian host rather than emit a file
+    # that only plays back correctly on the machine that made it.
+    if sys.byteorder == "big":
+        left_samples.byteswap()
+        right_samples.byteswap()
+
+    interleaved = array.array("h", bytes(total * 2))
+    interleaved[0::2] = left_samples
+    interleaved[1::2] = right_samples
+
+    with wave.open(path, "wb") as wav:
+        wav.setnchannels(2)
+        wav.setsampwidth(SAMPLE_WIDTH)
+        wav.setframerate(EXOTEL_SAMPLE_RATE)
+        wav.writeframes(interleaved.tobytes())
+
+    return frames / EXOTEL_SAMPLE_RATE
+
+
 # ----------------- outbound: handshake, media, stop ----------------- #
 
 
@@ -236,8 +300,12 @@ async def send_handshake(ws, state: CallState, args) -> None:
     log(state, f"-> start      stream_sid={args.stream_sid} call_sid={args.call_sid}")
 
 
-async def send_media(ws, state: CallState, pcm_chunk: bytes) -> None:
-    """One media event. Only media.payload is read; the rest mirrors a real stream."""
+async def send_media(ws, state: CallState, pcm_chunk: bytes, slot: int | None = None) -> None:
+    """One media event. Only media.payload is read; the rest mirrors a real stream.
+
+    `slot` is the Pacer index this chunk occupies; passing it records the chunk
+    onto the caller channel of the stereo recording at the matching offset.
+    """
     seq = state.next_seq()
     message = {
         "event": "media",
@@ -251,6 +319,9 @@ async def send_media(ws, state: CallState, pcm_chunk: bytes) -> None:
     }
     await ws.send(json.dumps(message))
     state.outbound_media_count += 1
+
+    if state.recording and slot is not None:
+        splice_into_track(state.caller_track, slot * len(pcm_chunk), pcm_chunk)
 
 
 async def send_stop(ws, state: CallState, args) -> None:
@@ -281,17 +352,32 @@ class Pacer:
     the VAD sees.
     """
 
-    def __init__(self, chunk_seconds: float):
+    def __init__(self, chunk_seconds: float, origin: float | None = None):
         self._chunk_seconds = chunk_seconds
-        self._origin = time.monotonic()
+        # Anchored to CallState.t0 by the caller so the send schedule and the
+        # stereo recording share one origin. Defaulting to "now" would put the
+        # outgoing timeline a few hundred microseconds after t=0, which is
+        # invisible in the logs but would skew the recording's two channels
+        # against each other.
+        self._origin = time.monotonic() if origin is None else origin
         self._sent = 0
 
-    async def wait_for_next(self) -> None:
+    async def wait_for_next(self) -> int:
+        """Block until this chunk's slot is due. Returns the slot index.
+
+        The index is the caller channel's position on the timeline: because
+        silence is streamed through every pause, the slots are gapless, so slot
+        N always covers [N*chunk, (N+1)*chunk) from t0. That's a stronger
+        guarantee than timestamping each send would give — it can't drift or
+        jitter — so the recording uses it instead of a wall-clock reading.
+        """
         deadline = self._origin + self._sent * self._chunk_seconds
         delay = deadline - time.monotonic()
         if delay > 0:
             await asyncio.sleep(delay)
+        slot = self._sent
         self._sent += 1
+        return slot
 
 
 async def stream_silence(
@@ -321,8 +407,8 @@ async def stream_silence(
     deadline = time.monotonic() + duration
 
     while time.monotonic() < deadline:
-        await pacer.wait_for_next()
-        await send_media(ws, state, silence_chunk)
+        slot = await pacer.wait_for_next()
+        await send_media(ws, state, silence_chunk, slot=slot)
 
         if until_quiet_for is None:
             continue
@@ -357,8 +443,8 @@ async def stream_wav(
         if len(chunk) < chunk_bytes:
             chunk = chunk + b"\x00" * (chunk_bytes - len(chunk))
 
-        await pacer.wait_for_next()
-        await send_media(ws, state, chunk)
+        slot = await pacer.wait_for_next()
+        await send_media(ws, state, chunk, slot=slot)
 
     return False
 
@@ -370,8 +456,8 @@ async def receive_loop(ws, state: CallState) -> None:
     """Drain the socket for the life of the call, keeping every audio payload.
 
     Runs concurrently with sending — the bot starts talking the moment it sees
-    the connection (bot.py's on_client_connected queues an LLMRunFrame), which
-    is well before we've finished streaming.
+    the connection (bot.py's on_client_connected pushes the greeting as a
+    TTSSpeakFrame), which is well before we've finished streaming.
     """
     try:
         async for raw in ws:
@@ -396,6 +482,24 @@ async def receive_loop(ws, state: CallState) -> None:
                 state.inbound_bytes += len(audio)
                 state.inbound_media_count += 1
                 state.last_inbound_media_at = time.monotonic()
+
+                if state.recording:
+                    # Reuses the timestamp just taken above rather than reading
+                    # the clock again. Unlike the caller side, these arrivals are
+                    # genuinely bursty — the bot sends nothing between
+                    # utterances — so the gaps here are real and must be kept.
+                    #
+                    # Clamped to a cursor because network jitter can make two
+                    # chunks' arrival times overlap, which is impossible for real
+                    # audio and would corrupt the splice. Clamping keeps speech
+                    # contiguous while still honouring the silences between turns.
+                    offset = (
+                        int((state.last_inbound_media_at - state.t0) * EXOTEL_SAMPLE_RATE)
+                        * SAMPLE_WIDTH
+                    )
+                    offset = max(offset, state.bot_cursor)
+                    splice_into_track(state.bot_track, offset, audio)
+                    state.bot_cursor = offset + len(audio)
 
                 if state.first_inbound_media_at is None:
                     state.first_inbound_media_at = state.last_inbound_media_at
@@ -434,9 +538,11 @@ async def run_call(args) -> int:
 
     state = CallState()
     state.stream_sid = args.stream_sid  # read by send_media
+    state.recording = bool(args.record_conversation)
 
     aborted = False
     receiver: asyncio.Task | None = None
+    stereo_seconds: float | None = None
 
     try:
         async with connect(args.url, max_size=None) as ws:
@@ -444,7 +550,7 @@ async def run_call(args) -> int:
             log(state, "connected")
 
             receiver = asyncio.create_task(receive_loop(ws, state))
-            pacer = Pacer(chunk_seconds)
+            pacer = Pacer(chunk_seconds, origin=state.t0)
 
             await send_handshake(ws, state, args)
 
@@ -538,6 +644,15 @@ async def run_call(args) -> int:
         if captured:
             write_wav_8k_mono(args.out, captured)
 
+        # Also in `finally`, for the same reason as --out: an abrupt run should
+        # still leave a listenable recording of however far the call got.
+        if state.recording and (state.caller_track or state.bot_track):
+            stereo_seconds = write_wav_8k_stereo(
+                args.record_conversation,
+                bytes(state.caller_track),
+                bytes(state.bot_track),
+            )
+
     # ----------------- summary ----------------- #
 
     captured = b"".join(state.inbound_audio)
@@ -552,6 +667,13 @@ async def run_call(args) -> int:
         verdict = "OK" if reply_bytes else "SILENT"
         print(f"  turn {index} reply: {seconds:6.2f}s  {reply_bytes:8} bytes  {verdict}")
     print(f"Audio out: {captured_seconds:.2f}s -> {args.out}" if captured else "Audio out: NONE")
+
+    if stereo_seconds is not None:
+        caller_seconds = len(state.caller_track) / (EXOTEL_SAMPLE_RATE * SAMPLE_WIDTH)
+        bot_seconds = len(state.bot_track) / (EXOTEL_SAMPLE_RATE * SAMPLE_WIDTH)
+        print(f"Recording: {stereo_seconds:.2f}s stereo -> {args.record_conversation}")
+        print(f"  L caller: {caller_seconds:6.2f}s of timeline")
+        print(f"  R bot   : {bot_seconds:6.2f}s of timeline")
 
     if state.first_inbound_media_at is not None:
         print(f"First bot audio at +{state.first_inbound_media_at - state.t0:.3f}s")
@@ -583,6 +705,16 @@ def parse_args(argv=None):
         help="input WAV: 8 kHz, mono, 16-bit PCM. Repeat for a multi-turn conversation",
     )
     parser.add_argument("--out", default="mock_exotel_out.wav", help="where to write bot audio")
+    parser.add_argument(
+        "--record-conversation",
+        metavar="FILENAME.wav",
+        default=None,
+        help=(
+            "also write a stereo WAV of the whole call on a real-time timeline: "
+            "left=caller (what we sent), right=bot. Pauses are preserved, so it "
+            "plays back like a recorded phone call. Independent of --out"
+        ),
+    )
 
     parser.add_argument(
         "--mode",
