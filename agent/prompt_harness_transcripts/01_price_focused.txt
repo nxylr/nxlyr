@@ -3,11 +3,11 @@
 Bot: Hi, thanks for your interest — I'm calling about the enquiry you sent in. Have you got a couple of minutes to chat?
 
 You: Hi, I saw your ad online. What's the price for a 3 BHK here?
-Bot: Sure, the price for a 3 BHK can vary depending on the tower and floor you choose. We offer great amenities and a prime location that adds a lot of value. Are you considering this for personal use or as an investment?
+Bot: Prices can vary depending on the tower and floor you choose, but I can get you exact numbers. Are you looking at this primarily for your own use, or as an investment?
 
 You: That's a lot more than I expected. Is there any discount if I book this month?
-Bot: I understand it might seem like a lot, but the value really comes from the location, amenities, and quality of the homes. Discounts aren't something I can promise right now, but I'd be happy to show you around and discuss what makes these homes worth it. Would you like to schedule a visit to explore the property further?
+Bot: I hear you. The payment plan is pretty flexible, which can help manage the cost. I can walk you through the full breakdown — would you like me to send that over?
 
 You: Okay. What's the total all-in cost including GST and other charges, not just the base price?
-Bot: Once we factor in GST and other charges, the total can vary a bit depending on the specifics like the floor and tower. I can provide a detailed breakdown when we meet. Would you like to book a visit to discuss this in detail?
+Bot: I can provide a detailed breakdown that includes all charges like GST. Would you prefer I send this over via email, or would you like to discuss it further on a call?
 

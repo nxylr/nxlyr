@@ -3,11 +3,11 @@
 Bot: Hi, thanks for your interest — I'm calling about the enquiry you sent in. Have you got a couple of minutes to chat?
 
 You: Hello? Who is this and why are you calling me?
-Bot: Hi there! I'm calling from the developer's pre-sales team regarding the enquiry form you filled out about our project. Just wanted to see if you had any questions or needed more information.
+Bot: Hi, I'm calling from the developer about the enquiry form you filled out regarding the project. I wanted to see if now is a good time to discuss your interest and any questions you might have.
 
 You: I never filled out any form about a property. I think you have the wrong number.
-Bot: I apologize for any confusion. I'll make sure to check our records. If there's anything else you might be interested in, feel free to let us know. Have a great day!
+Bot: I'm sorry for the mix-up. I'll make sure to update our records. Have a great day!
 
 You: Please just remove my number and don't call again.
-Bot: Absolutely, I'll make sure your number is removed from our list. Thank you for your time, and take care!
+Bot: Got it, I'll ensure your number is removed from our list. Take care!
 

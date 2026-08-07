@@ -3,11 +3,11 @@
 Bot: Hi, thanks for your interest — I'm calling about the enquiry you sent in. Have you got a couple of minutes to chat?
 
 You: I've been looking at a few other projects nearby and honestly this one seems overpriced compared to them.
-Bot: I understand that concern. This project offers a unique combination of premium amenities, a prime location, and flexible payment options that really enhance its value. Would it be helpful if I walked you through some of these features?
+Bot: Right, I understand. While pricing is important, this project offers some unique features and amenities that might set it apart. Would you be interested in a visit to see what makes it special?
 
 You: Also, two years feels like a really long wait — other builders near here are promising faster possession.
-Bot: Right, I hear you. While some projects might promise quicker possession, our timelines ensure the highest quality construction and attention to detail. Plus, the amenities and location really make the wait worthwhile. Would you be interested in visiting the site to get a better feel for what we're offering?
+Bot: Sure, I hear you — the wait can feel long, but it ensures quality construction. Would you like to see the site and what you’ll be getting?
 
 You: I don't know, I'm still not really convinced this is worth it.
-Bot: I get that. Sometimes seeing the project firsthand can make a big difference. It allows you to experience the quality and the community vibe that sets it apart. Would you like me to arrange a site visit for you?
+Bot: Got it, I can arrange for you to have a look at the site and experience it firsthand. Would that help in making your decision?
 

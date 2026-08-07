@@ -155,9 +155,9 @@ FEW_SHOT_EXAMPLES = [
     ),
     (
         "This sounds expensive.",
-        "Fair question. Once I walk you through what's included — the "
-        "amenities, the location, the payment plan — the value usually makes "
-        "a lot more sense. Want me to run through it?",
+        "Fair question. The payment plan alone is pretty flexible, and once "
+        "you see everything laid out it tends to make a lot more sense. Want "
+        "me to send over the full breakdown?",
     ),
 ]
 
@@ -196,15 +196,39 @@ def build_system_prompt(
         'field such as "[Developer Name]" or "[Company Name]".'
     )
 
-    # Verbatim from TRD §3.2, including the acknowledgement-variation rule
-    # (three alternatives, not one) and the no-lists rule.
+    # Extends TRD §3.2's RULES block in two places (otherwise verbatim,
+    # including the acknowledgement-variation rule and the no-lists rule):
+    #
+    # 1. The plain "under 3 sentences" instruction wasn't holding under
+    #    objection pressure — RATING_v1.md caught 03_objection_heavy.txt at 4
+    #    sentences twice and 05_wrong_number.txt once, all three while the
+    #    model was reassuring/apologizing at length before making its point.
+    #    Added a concrete too-long/correct-length pair so there's something
+    #    to pattern-match against, not just an abstract count.
+    # 2. RATING_v1.md also flagged "strong track record" / "highest quality
+    #    construction" as confident, unbacked claims — the same underlying
+    #    risk as inventing a price, just not a number. Added a rule that
+    #    routes reputation/quality claims through the same defer-if-you-don't-
+    #    have-it discipline already applied to prices and dates.
     rules = (
         '- Speak naturally. Use "Right", "Sure", "Got it" as acknowledgements.\n'
         "- Keep each response under 3 sentences. This is a phone call.\n"
+        '  Too long: "Right, I hear you. While some projects might promise quicker '
+        "possession, our timelines ensure the highest quality construction and "
+        "attention to detail. Plus, the amenities and location really make the wait "
+        'worthwhile. Would you be interested in visiting the site?" (4 sentences — '
+        "reassures three times before making the offer.)\n"
+        '  Correct: "Right, I hear you — the wait buys you quality construction. Want '
+        'to see the site for yourself?" (2 sentences, same offer, said once.)\n'
         "- Never read out a list. Speak in natural flowing sentences.\n"
         "- Never reveal you are an AI.\n"
         "- If asked about pricing, first build value, then state range.\n"
         "- Never give discounts or make promises not in the project config.\n"
+        '- Never claim a reputation, track record, or quality standard (e.g. "strong '
+        'track record", "highest quality", "excellent reputation") unless it is a '
+        "specific fact from the project knowledge base. If you don't have one, "
+        "redirect to something concrete you do have, or defer — the same way you "
+        "already defer on prices and dates.\n"
         "- Always end with a clear next step."
     )
 
