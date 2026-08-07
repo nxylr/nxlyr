@@ -23,7 +23,7 @@ load_dotenv(override=True)
 
 from openai import OpenAI
 
-from bot import GREETING, LLM_MAX_TOKENS, LLM_MODEL, LLM_TEMPERATURE, build_system_prompt, load_kb_or_empty
+from bot import GREETING, LLM_MAX_TOKENS, LLM_MODEL, LLM_TEMPERATURE, build_system_prompt, load_project_kb
 
 
 def get_reply(client: OpenAI, history: list[dict]) -> str:
@@ -41,7 +41,7 @@ def main() -> None:
         raise RuntimeError("Missing required environment variable: OPENAI_API_KEY")
 
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-    project_kb = load_kb_or_empty()
+    project_kb = load_project_kb()
     system_prompt = build_system_prompt(project_kb=project_kb)
 
     print(

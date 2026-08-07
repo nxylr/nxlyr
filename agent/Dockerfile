@@ -52,11 +52,12 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Only the three modules the server actually loads. week2_latency_observer.py is
-# imported lazily by bot.py and only when NXLYR_LATENCY_CSV is set — but it has
-# to be in the image, or enabling that env var would ImportError mid-call
-# instead of at boot.
-COPY bot.py server.py week2_latency_observer.py ./
+# Only the modules the server actually loads. week2_latency_observer.py and
+# kb_loader.py are both imported lazily by bot.py — the former only when
+# NXLYR_LATENCY_CSV is set, the latter on every call — but both have to be in
+# the image, or hitting that code path would ImportError mid-call instead of
+# at boot.
+COPY bot.py server.py week2_latency_observer.py kb_loader.py ./
 
 # Drop root. Nothing here writes to the filesystem in normal operation; if the
 # latency observer is ever enabled in a container it needs a writable path, so

@@ -112,20 +112,23 @@ LLM_MAX_TOKENS = 160
 LLM_TEMPERATURE = 0.75
 
 
-def load_kb_or_empty() -> dict:
-    """Load the real project KB if agent/kb_loader.py (Task 3.1) is merged; {} otherwise.
+# The tenant this bot serves. Single-project for now (Week 4 scope); becomes
+# a per-call parameter once server.py routes more than one tenant.
+KB_PROJECT_SLUG = "nxlyr-demo"
+
+
+def load_project_kb() -> dict:
+    """Load the real project KB from Supabase (agent/kb_loader.py, Task 3.1).
 
     Shared by run_bot() and prompt_harness.py so both go through the exact
-    same KB-loading behavior. Only the import is guarded — see run_bot()'s
-    original comment history: load_project_kb() itself is designed to fail
-    loudly on a bad/missing KB, and that exception must reach the caller, not
-    get relabelled as "module not merged" and silently swallowed into {}.
+    same KB-loading behavior. kb_loader.load_kb() fails loudly (raises) on a
+    missing/invalid KB — that exception is left to propagate to the caller
+    rather than caught and downgraded to {}, since neither a real call nor a
+    prompt-harness run is meaningful on an empty KB.
     """
-    try:
-        from kb_loader import load_project_kb
-    except ImportError:
-        return {}
-    return load_project_kb()
+    from kb_loader import load_kb
+
+    return load_kb(KB_PROJECT_SLUG)
 
 
 # Week 4 targets only the end-user persona (Implementation Plan §Week 4,
@@ -301,6 +304,24 @@ async def run_bot(websocket: WebSocket) -> None:
 
     logger.info(f"Exotel call connected — stream_sid={stream_sid} call_sid={call_sid}")
 
+    # Loaded before any STT/LLM/TTS setup: the call cannot proceed on a
+    # missing or invalid KB, so there's no point paying for that setup first.
+    # load_project_kb() raises on failure (kb_loader's fail-loud design) —
+    # re-raised here after a KB-specific log line, so it's clear from the
+    # logs *what* aborted the call rather than just that something did.
+    # server.py's /ws handler already wraps run_bot() in a try/except that
+    # logs the full traceback and closes the websocket gracefully (including
+    # the case where Exotel has already hung up), so that's left to do the
+    # actual close rather than duplicating it here.
+    try:
+        project_kb = load_project_kb()
+    except Exception as e:
+        logger.error(
+            f"Project KB failed to load for slug={KB_PROJECT_SLUG!r} "
+            f"(call_sid={call_sid}) — aborting call: {e}"
+        )
+        raise
+
     serializer = ExotelFrameSerializer(
         stream_sid=stream_sid,
         call_sid=call_sid,
@@ -368,8 +389,6 @@ async def run_bot(websocket: WebSocket) -> None:
                 voice=os.getenv("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM"),
             ),
         )
-
-        project_kb = load_kb_or_empty()
 
         context = LLMContext(
             messages=[

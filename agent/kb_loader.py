@@ -1,5 +1,5 @@
 import os
-import functools
+import time
 import requests
 from typing import Dict, Any
 from dotenv import load_dotenv
@@ -7,12 +7,22 @@ from dotenv import load_dotenv
 # Load environment variables from .env if present
 load_dotenv()
 
+# KB content is being edited in Supabase repeatedly this week based on call
+# feedback, so an unbounded process-lifetime cache (the previous
+# functools.lru_cache) would keep serving a stale KB until the container
+# restarted. Short TTL instead: still avoids a Supabase round trip on every
+# call, but an edit is picked up within one cache lifetime.
+_KB_CACHE_TTL_SECONDS = 300
+_kb_cache: Dict[str, tuple] = {}  # project_slug -> (cached_at_monotonic, config)
 
-@functools.lru_cache(maxsize=32)
+
 def load_kb(project_slug: str) -> Dict[str, Any]:
     """
     Loads property Knowledge Base (KB) config from Supabase REST API by joining
     projects with tenants where tenants.slug matches project_slug.
+
+    Cached in-process per project_slug for _KB_CACHE_TTL_SECONDS; a cache miss
+    or expiry triggers a fresh Supabase fetch.
 
     Args:
         project_slug: The tenant slug identifier (e.g. 'nxlyr-demo').
@@ -25,6 +35,17 @@ def load_kb(project_slug: str) -> Dict[str, Any]:
                     or the returned KB config is invalid/empty.
         RuntimeError: If the HTTP request to Supabase fails.
     """
+    cached = _kb_cache.get(project_slug)
+    if cached is not None and time.monotonic() - cached[0] < _KB_CACHE_TTL_SECONDS:
+        return cached[1]
+
+    config = _fetch_kb(project_slug)
+    _kb_cache[project_slug] = (time.monotonic(), config)
+    return config
+
+
+def _fetch_kb(project_slug: str) -> Dict[str, Any]:
+    """The actual Supabase fetch behind load_kb()'s cache. See load_kb() for details."""
     supabase_url = os.getenv("SUPABASE_URL")
     supabase_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 
