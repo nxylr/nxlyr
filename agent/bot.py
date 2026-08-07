@@ -104,6 +104,30 @@ def check_env():
         raise RuntimeError(f"Missing required environment variables: {missing}")
 
 
+# Named rather than inlined into OpenAILLMService.Settings below so
+# prompt_harness.py (Task 2.3's text-only harness) can import the exact
+# production values instead of duplicating them and risking drift.
+LLM_MODEL = "gpt-4o"
+LLM_MAX_TOKENS = 160
+LLM_TEMPERATURE = 0.75
+
+
+def load_kb_or_empty() -> dict:
+    """Load the real project KB if agent/kb_loader.py (Task 3.1) is merged; {} otherwise.
+
+    Shared by run_bot() and prompt_harness.py so both go through the exact
+    same KB-loading behavior. Only the import is guarded — see run_bot()'s
+    original comment history: load_project_kb() itself is designed to fail
+    loudly on a bad/missing KB, and that exception must reach the caller, not
+    get relabelled as "module not merged" and silently swallowed into {}.
+    """
+    try:
+        from kb_loader import load_project_kb
+    except ImportError:
+        return {}
+    return load_project_kb()
+
+
 # Week 4 targets only the end-user persona (Implementation Plan §Week 4,
 # "System prompt v1 — end-user persona"); PRD §6.2's continuous scoring model
 # and reclassification logic are Week 5 (C-01/C-02) and don't exist yet. This
@@ -163,7 +187,13 @@ def build_system_prompt(
         f"You are {agent_name}, a pre-sales representative at "
         f"{developer_name or project_kb.get('developer', 'the developer')}.\n"
         f"You are calling {lead_name} who filled in an enquiry form about "
-        f"{project_name or project_kb.get('project_name', 'the project')}."
+        f"{project_name or project_kb.get('project_name', 'the project')}.\n"
+        "IMPORTANT: say every name and detail above exactly as written, as "
+        'natural spoken words. If a detail reads as generic (like "the '
+        'developer" or "the project"), that IS the real value to say out '
+        "loud — it is not a placeholder waiting to be filled in. Never "
+        'invent a specific name, and never output a bracketed or templated '
+        'field such as "[Developer Name]" or "[Company Name]".'
     )
 
     # Verbatim from TRD §3.2, including the acknowledgement-variation rule
@@ -291,9 +321,9 @@ async def run_bot(websocket: WebSocket) -> None:
     llm = OpenAILLMService(
         api_key=os.getenv("OPENAI_API_KEY"),
         settings=OpenAILLMService.Settings(
-            model="gpt-4o",
-            max_tokens=160,
-            temperature=0.75,
+            model=LLM_MODEL,
+            max_tokens=LLM_MAX_TOKENS,
+            temperature=LLM_TEMPERATURE,
         ),
     )
 
@@ -315,20 +345,7 @@ async def run_bot(websocket: WebSocket) -> None:
             ),
         )
 
-        # agent/kb_loader.py is Section 3's deliverable (Task 3.1) and may not
-        # be merged into this branch yet — Task 3.3 is what actually wires KB
-        # loading into the prompt properly. Only the import is guarded: if the
-        # module is missing, {} keeps [PROJECT KNOWLEDGE BASE] rendering as "no
-        # data yet" instead of crashing the call. Once merged, load_project_kb()
-        # itself is called outside the try — it's designed to fail loudly on a
-        # bad/missing KB, and that has to reach the caller, not get relabelled
-        # as "module not merged" and silently swallowed into {}.
-        try:
-            from kb_loader import load_project_kb
-        except ImportError:
-            load_project_kb = None
-
-        project_kb = load_project_kb() if load_project_kb else {}
+        project_kb = load_kb_or_empty()
 
         context = LLMContext(
             messages=[
