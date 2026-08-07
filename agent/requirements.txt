@@ -10,3 +10,8 @@ aiohttp
 # must pin uvicorn ourselves for server.py. (The `websockets` package is an
 # unconditional core dep of pipecat-ai, so it needs no line here.)
 uvicorn>=0.32.0,<1.0.0
+
+# Only ever arrived transitively via pipecat-ai's [openai] extra before.
+# prompt_harness.py (Task 2.3) imports it directly for plain chat-completion
+# calls, so it needs its own pin rather than riding on pipecat's choice.
+openai==2.44.0

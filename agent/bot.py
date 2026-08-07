@@ -38,6 +38,7 @@ Requires environment variables (see .env.template):
   LOG_LEVEL             (optional — defaults to DEBUG)
 """
 
+import json
 import os
 import sys
 
@@ -50,7 +51,7 @@ load_dotenv(override=True)
 from fastapi import WebSocket
 
 from pipecat.audio.vad.silero import SileroVADAnalyzer
-from pipecat.frames.frames import LLMRunFrame
+from pipecat.frames.frames import TTSSpeakFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
 from pipecat.processors.aggregators.llm_context import LLMContext
@@ -101,6 +102,179 @@ def check_env():
     missing = [v for v in REQUIRED_ENV_VARS if not os.getenv(v)]
     if missing:
         raise RuntimeError(f"Missing required environment variables: {missing}")
+
+
+# Named rather than inlined into OpenAILLMService.Settings below so
+# prompt_harness.py (Task 2.3's text-only harness) can import the exact
+# production values instead of duplicating them and risking drift.
+LLM_MODEL = "gpt-4o"
+LLM_MAX_TOKENS = 160
+LLM_TEMPERATURE = 0.75
+
+
+def load_kb_or_empty() -> dict:
+    """Load the real project KB if agent/kb_loader.py (Task 3.1) is merged; {} otherwise.
+
+    Shared by run_bot() and prompt_harness.py so both go through the exact
+    same KB-loading behavior. Only the import is guarded — see run_bot()'s
+    original comment history: load_project_kb() itself is designed to fail
+    loudly on a bad/missing KB, and that exception must reach the caller, not
+    get relabelled as "module not merged" and silently swallowed into {}.
+    """
+    try:
+        from kb_loader import load_project_kb
+    except ImportError:
+        return {}
+    return load_project_kb()
+
+
+# Week 4 targets only the end-user persona (Implementation Plan §Week 4,
+# "System prompt v1 — end-user persona"); PRD §6.2's continuous scoring model
+# and reclassification logic are Week 5 (C-01/C-02) and don't exist yet. This
+# is the static stand-in TRD §3.2's [PERSONA CONTEXT] block reads from until
+# then — same shape PRD §6.2 defines for the real thing, so Week 5 only has to
+# swap in live per-turn scores, not touch the prompt structure.
+DEFAULT_PERSONA_CONTEXT = {
+    "end_user": 1.0,
+    "investor": 0.0,
+    "land_buyer": 0.0,
+}
+
+# Generic property-sales turns for TRD §3.2's [CONVERSATION EXAMPLES] block.
+# Deliberately not Meridian Heights-specific — Section 3's KB isn't merged yet.
+FEW_SHOT_EXAMPLES = [
+    (
+        "What's the price for a 3 BHK?",
+        "Depends a bit on the tower and floor, but I can get you exact numbers — "
+        "are you looking at this for yourself, or as an investment?",
+    ),
+    (
+        "Can you send me a brochure?",
+        "Sure, I'll have that sent right after this call. While I have you — "
+        "what's prompting the search, a new home or just exploring for now?",
+    ),
+    (
+        "This sounds expensive.",
+        "Fair question. The payment plan alone is pretty flexible, and once "
+        "you see everything laid out it tends to make a lot more sense. Want "
+        "me to send over the full breakdown?",
+    ),
+]
+
+
+def build_system_prompt(
+    *,
+    agent_name: str = "the assistant",
+    developer_name: str | None = None,
+    lead_name: str = "the caller",
+    project_name: str | None = None,
+    project_kb: dict | None = None,
+    persona_context: dict | None = None,
+) -> str:
+    """Assemble the system prompt from TRD §3.2's modular blocks.
+
+    Replaces the old hardcoded 3-line string. `project_kb` and
+    `persona_context` both default to placeholders so this is callable
+    standalone (e.g. from a mock call) without Section 3's KB or Week 5's
+    persona detector — see the module-level comments on each default for why.
+    """
+    project_kb = project_kb or {}
+    persona_context = persona_context or DEFAULT_PERSONA_CONTEXT
+    leading_persona = max(persona_context, key=persona_context.get)
+    persona_confidence = persona_context[leading_persona]
+
+    role = (
+        f"You are {agent_name}, a pre-sales representative at "
+        f"{developer_name or project_kb.get('developer', 'the developer')}.\n"
+        f"You are calling {lead_name} who filled in an enquiry form about "
+        f"{project_name or project_kb.get('project_name', 'the project')}.\n"
+        "IMPORTANT: say every name and detail above exactly as written, as "
+        'natural spoken words. If a detail reads as generic (like "the '
+        'developer" or "the project"), that IS the real value to say out '
+        "loud — it is not a placeholder waiting to be filled in. Never "
+        'invent a specific name, and never output a bracketed or templated '
+        'field such as "[Developer Name]" or "[Company Name]".'
+    )
+
+    # Extends TRD §3.2's RULES block in two places (otherwise verbatim,
+    # including the acknowledgement-variation rule and the no-lists rule):
+    #
+    # 1. The plain "under 3 sentences" instruction wasn't holding under
+    #    objection pressure — RATING_v1.md caught 03_objection_heavy.txt at 4
+    #    sentences twice and 05_wrong_number.txt once, all three while the
+    #    model was reassuring/apologizing at length before making its point.
+    #    Added a concrete too-long/correct-length pair so there's something
+    #    to pattern-match against, not just an abstract count.
+    # 2. RATING_v1.md also flagged "strong track record" / "highest quality
+    #    construction" as confident, unbacked claims — the same underlying
+    #    risk as inventing a price, just not a number. Added a rule that
+    #    routes reputation/quality claims through the same defer-if-you-don't-
+    #    have-it discipline already applied to prices and dates.
+    rules = (
+        '- Speak naturally. Use "Right", "Sure", "Got it" as acknowledgements.\n'
+        "- Keep each response under 3 sentences. This is a phone call.\n"
+        '  Too long: "Right, I hear you. While some projects might promise quicker '
+        "possession, our timelines ensure the highest quality construction and "
+        "attention to detail. Plus, the amenities and location really make the wait "
+        'worthwhile. Would you be interested in visiting the site?" (4 sentences — '
+        "reassures three times before making the offer.)\n"
+        '  Correct: "Right, I hear you — the wait buys you quality construction. Want '
+        'to see the site for yourself?" (2 sentences, same offer, said once.)\n'
+        "- Never read out a list. Speak in natural flowing sentences.\n"
+        "- Never reveal you are an AI.\n"
+        "- If asked about pricing, first build value, then state range.\n"
+        "- Never give discounts or make promises not in the project config.\n"
+        '- Never claim a reputation, track record, or quality standard (e.g. "strong '
+        'track record", "highest quality", "excellent reputation") unless it is a '
+        "specific fact from the project knowledge base. If you don't have one, "
+        "redirect to something concrete you do have, or defer — the same way you "
+        "already defer on prices and dates.\n"
+        "- Always end with a clear next step."
+    )
+
+    kb_block = json.dumps(project_kb, indent=2) if project_kb else "(none loaded yet)"
+
+    persona_block = (
+        f"Current leading persona: {leading_persona} (confidence: {persona_confidence:.2f})\n"
+        # Question sets and field-capture tracking (PRD §6.3, TRD §3.4) don't
+        # exist yet either — static text until that lands alongside Week 5.
+        "Active question set: end-user (budget, timeline, family needs, location)\n"
+        "Fields still to capture: (none tracked yet)\n"
+        "Reclassification trigger: False\n"
+        "  → If true: ask the confirming question before switching question sets.\n"
+        '    "You mentioned [signal] — are you looking at this as an investment,\n'
+        '     or primarily for your own use?"'
+    )
+
+    examples_block = "\n\n".join(f"Buyer: {q}\nYou: {a}" for q, a in FEW_SHOT_EXAMPLES)
+
+    # References tools by name only — TRD §3.5 already specifies their schema,
+    # and the actual handlers are Section 2/Task 2.1, gated behind Section 4.
+    tools_block = (
+        "Use book_site_visit when the lead agrees to visit.\n"
+        "Use end_call when the conversation is naturally complete.\n"
+        "Use transfer_to_human when the query is outside your scope."
+    )
+
+    return (
+        f"[ROLE]\n{role}\n\n"
+        f"[RULES]\n{rules}\n\n"
+        f"[PROJECT KNOWLEDGE BASE]\n{kb_block}\n\n"
+        f"[PERSONA CONTEXT]\n{persona_block}\n\n"
+        f"[CONVERSATION EXAMPLES]\n{examples_block}\n\n"
+        f"[TOOLS]\n{tools_block}"
+    )
+
+
+# Fixed opening line, pushed directly as a TTSSpeakFrame on connect rather than
+# left for the LLM to improvise from the system prompt (see on_client_connected
+# for why — the improvised version caused a real bug) or baked into the system
+# prompt as a standing directive (tried once, reverted — a permanent per-turn
+# instruction isn't a first-turn-only one).
+GREETING = (
+    "Hi, thanks for your interest — I'm calling about the enquiry you sent in. "
+    "Have you got a couple of minutes to chat?"
+)
 
 
 async def run_bot(websocket: WebSocket) -> None:
@@ -171,9 +345,9 @@ async def run_bot(websocket: WebSocket) -> None:
     llm = OpenAILLMService(
         api_key=os.getenv("OPENAI_API_KEY"),
         settings=OpenAILLMService.Settings(
-            model="gpt-4o",
-            max_tokens=160,
-            temperature=0.75,
+            model=LLM_MODEL,
+            max_tokens=LLM_MAX_TOKENS,
+            temperature=LLM_TEMPERATURE,
         ),
     )
 
@@ -195,15 +369,13 @@ async def run_bot(websocket: WebSocket) -> None:
             ),
         )
 
+        project_kb = load_kb_or_empty()
+
         context = LLMContext(
             messages=[
                 {
                     "role": "system",
-                    "content": (
-                        "You are a friendly real estate pre-sales assistant for an "
-                        "Indian property developer. Keep replies short (1-2 sentences) "
-                        "and conversational, like a real phone call."
-                    ),
+                    "content": build_system_prompt(project_kb=project_kb),
                 }
             ]
         )
@@ -277,10 +449,17 @@ async def run_bot(websocket: WebSocket) -> None:
             # Bot speaks first. The official outbound example stays silent here,
             # but that's for its connect-two-numbers flow where the bot leg
             # answers before the customer is even dialed. Ours is a pre-sales
-            # agent that should open the conversation — same kickoff
-            # test_pipeline.py used.
-            logger.info(f"Client connected — starting conversation (call_sid={call_sid})")
-            await worker.queue_frames([LLMRunFrame()])
+            # agent that should open the conversation.
+            #
+            # This used to queue an LLMRunFrame and let the LLM improvise an
+            # opening line from the system prompt alone. That's what produced
+            # Call #1's bug (00_PROJECT_CONTEXT.md): the model didn't greet
+            # until 65 seconds in. Pushing GREETING as a TTSSpeakFrame instead
+            # makes the opening line fixed and instant — no LLM round trip to
+            # wait on turn 1. append_to_context defaults to True, so it's still
+            # recorded as the first assistant turn for later turns to build on.
+            logger.info(f"Client connected — sending greeting (call_sid={call_sid})")
+            await worker.queue_frames([TTSSpeakFrame(GREETING)])
 
         @transport.event_handler("on_client_disconnected")
         async def on_client_disconnected(transport, client):

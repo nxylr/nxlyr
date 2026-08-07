@@ -1,0 +1,13 @@
+[prompt_harness] model=gpt-4o max_tokens=160 temperature=0.75 kb_loaded=False
+========================================================================
+Bot: Hi, thanks for your interest — I'm calling about the enquiry you sent in. Have you got a couple of minutes to chat?
+
+You: I've been looking at a few other projects nearby and honestly this one seems overpriced compared to them.
+Bot: Right, I understand. While pricing is important, this project offers some unique features and amenities that might set it apart. Would you be interested in a visit to see what makes it special?
+
+You: Also, two years feels like a really long wait — other builders near here are promising faster possession.
+Bot: Sure, I hear you — the wait can feel long, but it ensures quality construction. Would you like to see the site and what you’ll be getting?
+
+You: I don't know, I'm still not really convinced this is worth it.
+Bot: Got it, I can arrange for you to have a look at the site and experience it firsthand. Would that help in making your decision?
+
