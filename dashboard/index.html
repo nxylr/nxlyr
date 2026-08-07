@@ -3,17 +3,374 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>NXLYR — Coming Soon</title>
+  <meta name="theme-color" content="#101826">
+  <title>NXLYR — AI Property Sales Demo</title>
   <style>
-    body { font-family: sans-serif; display: flex; flex-direction: column;
-           align-items: center; justify-content: center; height: 100vh;
-           margin: 0; background: #0a0a0a; color: #fff; }
-    h1 { font-size: 2.5rem; letter-spacing: -0.05em; }
-    p  { color: #888; }
+    :root {
+      color-scheme: dark;
+      --ink: #f5f7fb;
+      --muted: #a9b4c7;
+      --surface: rgba(19, 29, 47, 0.76);
+      --panel: rgba(4, 10, 20, 0.68);
+      --line: rgba(216, 226, 244, 0.16);
+      --accent: #b7ff55;
+      --accent-ink: #102000;
+      --danger: #ffaaa9;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      min-height: 100vh;
+      margin: 0;
+      display: grid;
+      place-items: center;
+      overflow-x: hidden;
+      background:
+        radial-gradient(circle at 15% 3%, rgba(126, 87, 255, 0.32), transparent 34rem),
+        radial-gradient(circle at 91% 85%, rgba(100, 208, 161, 0.19), transparent 31rem),
+        #090e18;
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    body::before {
+      position: fixed;
+      inset: 0;
+      z-index: -1;
+      background-image: radial-gradient(rgba(221, 232, 255, 0.12) 0.6px, transparent 0.6px);
+      background-size: 1.5rem 1.5rem;
+      mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.45), transparent 72%);
+      content: "";
+      pointer-events: none;
+    }
+
+    main { width: min(100%, 74rem); padding: 2rem; }
+
+    .card {
+      position: relative;
+      overflow: hidden;
+      padding: clamp(1.5rem, 4vw, 3.5rem);
+      border: 1px solid var(--line);
+      border-radius: 1.75rem;
+      background: var(--surface);
+      box-shadow: 0 2rem 6rem rgba(0, 0, 0, 0.35);
+      backdrop-filter: blur(18px);
+    }
+
+    .card::after {
+      content: "";
+      position: absolute;
+      top: -9rem;
+      right: -8rem;
+      width: 19rem;
+      aspect-ratio: 1;
+      border: 1px solid rgba(183, 255, 85, 0.25);
+      border-radius: 50%;
+      box-shadow: 0 0 0 2.5rem rgba(183, 255, 85, 0.035), 0 0 0 5rem rgba(183, 255, 85, 0.025);
+      pointer-events: none;
+    }
+
+    .brand {
+      position: relative;
+      z-index: 1;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding-bottom: 1.4rem;
+      border-bottom: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 0.72rem;
+      font-weight: 800;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+    }
+
+    .brand strong { color: var(--ink); font-size: 0.9rem; letter-spacing: 0.08em; }
+    .brand-status { display: inline-flex; align-items: center; gap: 0.45rem; }
+    .brand-status::before { width: 0.45rem; height: 0.45rem; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0.75rem var(--accent); content: ""; }
+
+    .layout {
+      position: relative;
+      z-index: 1;
+      display: grid;
+      grid-template-columns: minmax(0, 1.15fr) minmax(20rem, 0.85fr);
+      gap: clamp(2rem, 6vw, 6rem);
+      align-items: center;
+      padding-top: clamp(2.5rem, 6vw, 5rem);
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin: 0 0 1.5rem;
+      color: var(--accent);
+      font-size: 0.78rem;
+      font-weight: 800;
+      letter-spacing: 0.13em;
+      text-transform: uppercase;
+    }
+
+    .eyebrow::before {
+      width: 0.55rem;
+      height: 0.55rem;
+      border-radius: 50%;
+      background: currentColor;
+      box-shadow: 0 0 1rem currentColor;
+      content: "";
+    }
+
+    h1 {
+      max-width: 10ch;
+      margin: 0;
+      font-size: clamp(2.75rem, 5.6vw, 5.5rem);
+      line-height: 0.94;
+      letter-spacing: -0.065em;
+    }
+
+    .intro {
+      max-width: 35rem;
+      margin: 1.7rem 0 0;
+      color: var(--muted);
+      font-size: clamp(1rem, 2vw, 1.2rem);
+      line-height: 1.6;
+    }
+
+    .proof {
+      display: flex;
+      align-items: center;
+      gap: 0.65rem;
+      margin: 1.8rem 0 0;
+      color: #d1dbeb;
+      font-size: 0.88rem;
+      font-weight: 650;
+    }
+
+    .proof-mark {
+      display: grid;
+      width: 1.55rem;
+      height: 1.55rem;
+      place-items: center;
+      border: 1px solid rgba(183, 255, 85, 0.4);
+      border-radius: 50%;
+      color: var(--accent);
+      font-size: 0.85rem;
+    }
+
+    .form-panel {
+      padding: clamp(1.25rem, 3vw, 2rem);
+      border: 1px solid rgba(216, 226, 244, 0.18);
+      border-radius: 1.2rem;
+      background: var(--panel);
+      box-shadow: inset 0 1px rgba(255, 255, 255, 0.04), 0 1.5rem 3rem rgba(0, 0, 0, 0.16);
+    }
+
+    .form-kicker {
+      display: flex;
+      align-items: center;
+      gap: 0.65rem;
+      margin: 0 0 1.5rem;
+      color: var(--ink);
+      font-size: 1rem;
+      font-weight: 780;
+      letter-spacing: -0.02em;
+    }
+
+    .phone-glyph {
+      display: grid;
+      width: 2.25rem;
+      height: 2.25rem;
+      place-items: center;
+      border-radius: 0.7rem;
+      background: var(--accent);
+      color: var(--accent-ink);
+      font-size: 1.1rem;
+    }
+
+    form { max-width: 35rem; }
+
+    label {
+      display: block;
+      margin-bottom: 0.6rem;
+      font-size: 0.92rem;
+      font-weight: 700;
+    }
+
+    .input-row {
+      display: flex;
+      gap: 0.75rem;
+    }
+
+    input, button { font: inherit; }
+
+    input {
+      min-width: 0;
+      flex: 1;
+      padding: 1rem 1.05rem;
+      border: 1px solid var(--line);
+      border-radius: 0.85rem;
+      outline: none;
+      background: rgba(2, 7, 15, 0.48);
+      color: var(--ink);
+      font-size: 1.05rem;
+    }
+
+    input::placeholder { color: #788499; }
+    input:focus { border-color: var(--accent); box-shadow: 0 0 0 0.25rem rgba(183, 255, 85, 0.12); }
+
+    button {
+      flex: none;
+      padding: 1rem 1.15rem;
+      border: 0;
+      border-radius: 0.85rem;
+      background: var(--accent);
+      color: var(--accent-ink);
+      cursor: pointer;
+      font-weight: 820;
+      transition: transform 150ms ease, filter 150ms ease;
+    }
+
+    button:hover { filter: brightness(1.06); transform: translateY(-1px); }
+    button:focus-visible { outline: 0.2rem solid var(--ink); outline-offset: 0.2rem; }
+    button:disabled { cursor: wait; opacity: 0.7; transform: none; }
+
+    .consent {
+      max-width: 37rem;
+      margin: 1.1rem 0 0;
+      color: var(--muted);
+      font-size: 0.78rem;
+      line-height: 1.55;
+    }
+
+    .message {
+      max-width: 35rem;
+      margin: 1rem 0 0;
+      padding: 0.9rem 1rem;
+      border-radius: 0.7rem;
+      font-weight: 650;
+      line-height: 1.4;
+    }
+
+    .message[hidden] { display: none; }
+    .message.success { border: 1px solid rgba(183, 255, 85, 0.4); background: rgba(183, 255, 85, 0.1); color: #d7ff9d; }
+    .message.error { border: 1px solid rgba(255, 170, 169, 0.4); background: rgba(255, 170, 169, 0.1); color: var(--danger); }
+
+    @media (max-width: 34rem) {
+      main { padding: 1rem; }
+      .card { border-radius: 1.25rem; }
+      .brand { padding-bottom: 1rem; }
+      .brand-status { letter-spacing: 0.08em; }
+      .layout { gap: 2rem; padding-top: 2.5rem; }
+      .input-row { flex-direction: column; }
+      button { width: 100%; }
+    }
+
+    @media (max-width: 48rem) {
+      .layout { grid-template-columns: 1fr; }
+      h1 { max-width: 12ch; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; }
+    }
   </style>
 </head>
 <body>
-  <h1>NXLYR</h1>
-  <p>AI-powered real estate pre-sales calls. Coming soon.</p>
+  <main>
+    <section class="card" aria-labelledby="page-title">
+      <div class="brand">
+        <strong>NXLYR</strong>
+        <span class="brand-status">AI voice demo</span>
+      </div>
+      <div class="layout">
+        <div>
+          <p class="eyebrow">A real conversation, on your phone</p>
+          <h1 id="page-title">Experience an AI property sales call</h1>
+          <p class="intro">See how a natural, responsive AI voice agent can introduce a property and qualify buyer interest — on a real phone call.</p>
+          <p class="proof"><span class="proof-mark" aria-hidden="true">✓</span>No app or signup required</p>
+        </div>
+
+        <div class="form-panel">
+          <p class="form-kicker"><span class="phone-glyph" aria-hidden="true">☎</span>Try the live demo</p>
+          <form id="demo-form" action="/demo/call" method="post" novalidate>
+            <label for="phone">Indian mobile number</label>
+            <div class="input-row">
+              <input
+                id="phone"
+                name="phone"
+                type="tel"
+                inputmode="tel"
+                autocomplete="tel"
+                placeholder="98765 43210"
+                aria-describedby="form-message consent"
+                required
+              >
+              <button id="submit-button" type="submit">Call me now</button>
+            </div>
+            <p id="consent" class="consent">By submitting your number, you consent to receiving an AI-generated demonstration call. This is a demo — no real property transaction is involved.</p>
+          </form>
+
+          <p id="form-message" class="message" role="status" aria-live="polite" hidden></p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const form = document.getElementById('demo-form');
+    const phoneInput = document.getElementById('phone');
+    const submitButton = document.getElementById('submit-button');
+    const message = document.getElementById('form-message');
+
+    function normalizeIndianNumber(value) {
+      const digits = value.replace(/\D/g, '');
+      let mobile = digits;
+
+      if (digits.length === 12 && digits.startsWith('91')) mobile = digits.slice(2);
+      if (digits.length === 11 && digits.startsWith('0')) mobile = digits.slice(1);
+
+      return /^[6-9]\d{9}$/.test(mobile) ? `+91${mobile}` : null;
+    }
+
+    function showMessage(text, type) {
+      message.textContent = text;
+      message.className = `message ${type}`;
+      message.hidden = false;
+    }
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      message.hidden = true;
+
+      const phone = normalizeIndianNumber(phoneInput.value);
+      if (!phone) {
+        showMessage('Enter a valid 10-digit Indian mobile number.', 'error');
+        phoneInput.focus();
+        return;
+      }
+
+      phoneInput.value = phone;
+      submitButton.disabled = true;
+      submitButton.textContent = 'Requesting call…';
+
+      try {
+        const response = await fetch(form.action, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+          body: JSON.stringify({ phone })
+        });
+
+        if (!response.ok) throw new Error(`Request failed (${response.status})`);
+        showMessage("You'll receive a call within 60 seconds", 'success');
+        form.reset();
+      } catch (error) {
+        showMessage('We could not request your demo call right now. Please try again shortly.', 'error');
+      } finally {
+        submitButton.disabled = false;
+        submitButton.textContent = 'Call me now';
+      }
+    });
+  </script>
 </body>
 </html>
