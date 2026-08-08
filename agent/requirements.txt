@@ -15,3 +15,10 @@ uvicorn>=0.32.0,<1.0.0
 # prompt_harness.py (Task 2.3) imports it directly for plain chat-completion
 # calls, so it needs its own pin rather than riding on pipecat's choice.
 openai==2.44.0
+
+# First Python Redis client in the project. Redis has been a docker-compose
+# service since Week 3 (and `agent` already depends_on it), but nothing spoke to
+# it until tools.py needed to write end_call_tool_invoked for Flow 3's drop
+# detection. >=5 because that's where redis.asyncio landed as the supported
+# async client (the separate aioredis package is long dead).
+redis>=5.0.0,<7.0.0

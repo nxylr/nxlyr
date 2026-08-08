@@ -36,11 +36,17 @@ Requires environment variables (see .env.template):
   ELEVENLABS_MODEL      (optional — defaults to eleven_turbo_v2)
   NXLYR_LATENCY_CSV     (optional — enables the Week 2 latency observer)
   LOG_LEVEL             (optional — defaults to DEBUG)
+  REDIS_URL             (optional, but wanted in production — without it the
+                         tool handlers cannot write the session flags Flow 3's
+                         drop detection reads, so every clean bot-initiated
+                         hangup gets misfiled as a dropped call. The call
+                         itself still runs.)
 """
 
 import json
 import os
 import sys
+from datetime import date
 
 import aiohttp
 from loguru import logger
@@ -80,6 +86,8 @@ from pipecat.turns.user_start import (
 )
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.workers.runner import WorkerRunner
+
+from tools import TOOL_SCHEMAS, CallResources, make_redis_client
 
 # Bare logger.remove() rather than test_pipeline.py's logger.remove(0): this module
 # is imported by a long-lived server, and remove(0) raises if the default handler
@@ -173,6 +181,7 @@ def build_system_prompt(
     project_name: str | None = None,
     project_kb: dict | None = None,
     persona_context: dict | None = None,
+    today: date | None = None,
 ) -> str:
     """Assemble the system prompt from TRD §3.2's modular blocks.
 
@@ -183,6 +192,7 @@ def build_system_prompt(
     """
     project_kb = project_kb or {}
     persona_context = persona_context or DEFAULT_PERSONA_CONTEXT
+    today = today or date.today()
     leading_persona = max(persona_context, key=persona_context.get)
     persona_confidence = persona_context[leading_persona]
 
@@ -232,6 +242,11 @@ def build_system_prompt(
         "specific fact from the project knowledge base. If you don't have one, "
         "redirect to something concrete you do have, or defer — the same way you "
         "already defer on prices and dates.\n"
+        '- Never promise when a follow-up will happen. "shortly", "soon", "right '
+        'away", "within the hour", "today" — no such commitment exists to make. '
+        "A colleague following up is true; a colleague following up *soon* is "
+        "not. This holds on every turn, including when the caller pushes back a "
+        "second time and you are restating something you already said.\n"
         "- Always end with a clear next step."
     )
 
@@ -251,16 +266,60 @@ def build_system_prompt(
 
     examples_block = "\n\n".join(f"Buyer: {q}\nYou: {a}" for q, a in FEW_SHOT_EXAMPLES)
 
-    # References tools by name only — TRD §3.5 already specifies their schema,
-    # and the actual handlers are Section 2/Task 2.1, gated behind Section 4.
+    # These three are now real callable functions (agent/tools.py, Task 4.1),
+    # registered on the LLMContext and advertised to the model with their full
+    # TRD §3.5 schemas. This block used to be the *only* place they existed —
+    # named in prose with nothing behind them — which is why the model narrated
+    # bookings it could not make. The prompt text now reinforces a mechanism
+    # rather than substituting for one.
+    #
+    # The "actually call the function" wording is deliberate. On the 2026-08-08
+    # test calls the model reliably recognised the right moment and then only
+    # described the action; saying the quiet part out loud costs three lines and
+    # removes the ambiguity.
     tools_block = (
-        "Use book_site_visit when the lead agrees to visit.\n"
-        "Use end_call when the conversation is naturally complete.\n"
-        "Use transfer_to_human when the query is outside your scope."
+        "You have three real functions available. Actually call them — do not "
+        "just say you have.\n"
+        "- book_site_visit when the lead agrees to visit. Call it at the moment "
+        "they agree, before or as you confirm. Never tell someone a visit is "
+        "booked without calling it. preferred_date must be a real future "
+        "YYYY-MM-DD date worked out from today's date in [CURRENT DATE] — "
+        'callers say "Saturday" or "the 15th", never a year, and a date in the '
+        "past is a failed booking.\n"
+        "- end_call when the conversation is naturally complete. Do not wait for "
+        "the caller to hang up.\n"
+        "- transfer_to_human when the query is outside your scope. This logs a "
+        "callback request — it does NOT put anyone on the line, and it does "
+        "NOT schedule a call. Nothing is promised about when.\n"
+        '  Wrong: "I\'m putting you through to a colleague now." (Nobody is on '
+        "the line.)\n"
+        '  Wrong: "A colleague will reach out to you shortly." (Also "soon", '
+        '"right away", "within the hour" — no timeframe exists to promise.)\n'
+        "  Correct, and only ever said in the same turn you call the function, "
+        'never before it: "That\'s outside what I can answer — I\'ve passed '
+        "your question to a colleague who handles it, and they'll follow up "
+        'with you." (True, and commits to nothing we cannot deliver.)\n'
+        '  Saying "I\'ve passed your question on" without calling '
+        "transfer_to_human in that same turn is a lie — the sentence is only "
+        "true because the function call made it true."
+    )
+
+    # The model has no clock. Without this block gpt-4o resolved "Saturday the
+    # 15th of August" to 2024-08-15 on the very first Task 4.1 harness run —
+    # correct format, two years in the past, and book_site_visit accepted it.
+    # That is the same class of failure as the narrated booking: a
+    # confirmation the caller believes and the business cannot honour. The
+    # weekday is included because callers name days ("Saturday"), not dates,
+    # and the model cannot derive one from the other unaided.
+    date_block = (
+        f"Today is {today:%A, %d %B %Y} ({today:%Y-%m-%d}).\n"
+        "Work out every date the caller mentions relative to this, and never "
+        "emit a date earlier than it."
     )
 
     return (
         f"[ROLE]\n{role}\n\n"
+        f"[CURRENT DATE]\n{date_block}\n\n"
         f"[RULES]\n{rules}\n\n"
         f"[PROJECT KNOWLEDGE BASE]\n{kb_block}\n\n"
         f"[PERSONA CONTEXT]\n{persona_block}\n\n"
@@ -390,13 +449,20 @@ async def run_bot(websocket: WebSocket) -> None:
             ),
         )
 
+        # tools= goes on the LLMContext, not on OpenAILLMService — that service
+        # has no tools parameter in Pipecat 1.5.0 (its __init__ takes only
+        # model/service_tier/params/settings). Each schema in TOOL_SCHEMAS
+        # carries its own handler, and LLMService._register_advertised_tool_
+        # handlers() registers them automatically from the context, so there is
+        # deliberately no register_function() call here.
         context = LLMContext(
             messages=[
                 {
                     "role": "system",
                     "content": build_system_prompt(project_kb=project_kb),
                 }
-            ]
+            ],
+            tools=TOOL_SCHEMAS,
         )
         context_aggregator = LLMContextAggregatorPair(
             context,
@@ -452,6 +518,21 @@ async def run_bot(websocket: WebSocket) -> None:
 
             observers.append(make_week2_latency_observer(latency_csv))
 
+        # Per-call state for the tool handlers, reached via
+        # FunctionCallParams.app_resources. app_resources is passed by
+        # reference, so all three handlers share this one object for the
+        # duration of the call — which is what lets them write the session
+        # flags without a module-level global that two concurrent calls in the
+        # same process would trample.
+        #
+        # make_redis_client() returns None instead of raising when REDIS_URL is
+        # unset or the server is unreachable. Unlike the KB load above — which
+        # aborts the call, because there is no conversation to have without a
+        # KB — a missing Redis only degrades post-call drop classification, and
+        # dropping a live buyer over an analytics write would be the worse bug.
+        redis_client = await make_redis_client()
+        call_resources = CallResources(call_sid=call_sid, redis=redis_client)
+
         worker = PipelineWorker(
             pipeline,
             params=PipelineParams(
@@ -461,6 +542,7 @@ async def run_bot(websocket: WebSocket) -> None:
                 enable_usage_metrics=True,
             ),
             observers=observers,
+            app_resources=call_resources,
         )
 
         @transport.event_handler("on_client_connected")
@@ -489,7 +571,18 @@ async def run_bot(websocket: WebSocket) -> None:
         # owns us, not to one call's pipeline.
         runner = WorkerRunner(handle_sigint=False)
 
-        await runner.add_workers(worker)
-        await runner.run()
+        try:
+            await runner.add_workers(worker)
+            await runner.run()
+        finally:
+            # try/finally rather than a plain call after run(): server.py's /ws
+            # handler catches whatever escapes run_bot(), so without this a
+            # failed call would leak the connection for the process lifetime.
+            # The session hash itself is left in Redis on purpose — Flow 3's
+            # post-call webhook is what reads end_call_tool_invoked, and it
+            # fires after this coroutine is gone. The 4h EXPIRE that
+            # tools._set_session_flag arms is what cleans it up.
+            if redis_client is not None:
+                await redis_client.aclose()
 
     logger.info(f"Call finished (call_sid={call_sid})")
