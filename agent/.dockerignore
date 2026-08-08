@@ -1,10 +1,18 @@
 # Build context exclusions for agent/ (Week 3 / Task 2.5)
 #
-# The Dockerfile COPYs only four files by name, so nothing here could reach the
-# final image regardless. This file is about the *context* — everything not
-# excluded gets tarred up and shipped to the Docker daemon on every build. Two
-# reasons that matters: agent/venv is ~568 MB of dead weight, and agent/.env
-# holds live API keys that have no business crossing into the daemon at all.
+# This file now does two jobs, where it used to do one.
+#
+# 1. Context hygiene, as before: everything not excluded gets tarred up and
+#    shipped to the Docker daemon on every build. agent/venv is ~568 MB of dead
+#    weight, and agent/.env holds live API keys that have no business crossing
+#    into the daemon at all.
+#
+# 2. Deciding what ships. The Dockerfile used to COPY a hand-written list of
+#    filenames, which meant exclusion was encoded in two places; the list was
+#    forgotten twice (kb_loader.py, tools.py) while this file was never wrong.
+#    The Dockerfile now does `COPY *.py ./`, so THIS is the only place that
+#    decides what reaches the image. A new module ships by default — list it
+#    below if it should not.
 
 # --- Secrets. Keep this rule first; nothing below should ever override it. ---
 .env
@@ -39,6 +47,16 @@ check_dotenv.py
 entrypoint.sh
 wavs/
 keycheck/
+
+# --- Dev-only modules that COPY *.py would otherwise pull in ------------------
+# Previously kept out of the image by the Dockerfile's explicit COPY list rather
+# than by any rule here. Now that the COPY is a wildcard, they need naming.
+# prompt_harness.py imports bot and tools and would work in the image, but it is
+# a text-mode test driver — there is no reason for it on a production host.
+prompt_harness.py
+prompt_harness_transcripts/
+test_kb_loader.py
+mock_exotel_client.py
 
 # --- Shell tooling: host/server inspection, never runs inside the container ---
 *.sh

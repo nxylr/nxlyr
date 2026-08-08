@@ -52,12 +52,34 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Only the modules the server actually loads. week2_latency_observer.py and
-# kb_loader.py are both imported lazily by bot.py — the former only when
-# NXLYR_LATENCY_CSV is set, the latter on every call — but both have to be in
-# the image, or hitting that code path would ImportError mid-call instead of
-# at boot.
-COPY bot.py server.py week2_latency_observer.py kb_loader.py ./
+# Wildcard, not a hand-maintained list. The list was forgotten twice — once for
+# kb_loader.py, again for tools.py — and each omission produced a broken image
+# that built cleanly.
+#
+# What made the list redundant rather than merely error-prone: .dockerignore
+# already excludes every diagnostic and test module by name, and it has never
+# been the thing that was wrong. Two filters encoding one intent, and the
+# duplicate is the one that kept drifting. Exclusion now lives in exactly one
+# place — add a module there if it should NOT ship, rather than remembering to
+# add it here if it should.
+COPY *.py ./
+
+# Fails the build if any module the server needs is missing from the image.
+#
+# This is the backstop the previous two omissions had nothing standing in for:
+# a missing file did not break `docker build`, it broke the container at
+# runtime — kb_loader.py would have ImportError'd mid-call, tools.py at boot.
+# Both are discovered by a human, in the worst case by a caller.
+#
+# `import server` transitively covers server -> bot -> tools, kb_loader and the
+# pipecat stack. week2_latency_observer is named separately because bot.py
+# imports it lazily, inside run_bot() and only when NXLYR_LATENCY_CSV is set,
+# so no import of server would ever reach it.
+#
+# Runs without credentials on purpose: nothing here reads env vars at import
+# time (bot.check_env() is called inside run_bot), so this stays a pure
+# module-resolution check and needs no build secrets.
+RUN python -c "import server, week2_latency_observer"
 
 # Drop root. Nothing here writes to the filesystem in normal operation; if the
 # latency observer is ever enabled in a container it needs a writable path, so
