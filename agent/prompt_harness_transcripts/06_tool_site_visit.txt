@@ -1,0 +1,37 @@
+2026-08-08 15:52:48.337 | INFO     | pipecat:<module>:54 - ᓚᘏᗢ Pipecat 1.5.0 (Python 3.12.13 (main, Mar  3 2026, 12:39:30) [Clang 21.0.0 (clang-2100.0.123.102)]) ᓚᘏᗢ
+2026-08-08 15:52:49.879 | INFO     | tools:make_redis_client:507 - Redis connected (redis://127.0.0.1:6379/0)
+[prompt_harness] model=gpt-4o max_tokens=160 temperature=0.75 kb_loaded=True tools=['book_site_visit', 'transfer_to_human', 'end_call'] redis=connected session_key=session:call:harness-41032
+========================================================================
+Bot: Hi, thanks for your interest — I'm calling about the enquiry you sent in. Have you got a couple of minutes to chat?
+
+You: Yes I've got a few minutes. I filled the form last week — looking for a 3 BHK for my family.
+Bot: Great! Meridian Heights offers luxurious 3 BHK options with private elevator lobbies and over 80% green open spaces. The sizes range from 1850 to 2150 square feet, with prices between 2.2 and 2.7 crore rupees, depending on the exact specifications. Would you like more information on a site visit, or perhaps floor plans?
+
+You: Okay that sounds reasonable. What's the location like, is it close to schools?
+Bot: Meridian Heights is located in Sector 79B, Gurugram, near the Southern Peripheral Road and NH-8 junction. It's well-connected, so you can avoid central city traffic, and Cyber City is under 25 minutes away. There are several good schools within a short drive from the area, making it convenient for families. Would you like to arrange a site visit to explore further?
+
+You: Honestly I think I'd rather just see it myself. Can I visit the site?
+Bot: Of course, I'd be happy to arrange a site visit for you. Do you have a specific date or time in mind for your visit?
+
+You: Saturday the 15th of August works, sometime in the afternoon — say 3pm.
+
+  [TOOL CALL] book_site_visit
+  arguments: {"preferred_date":"2026-08-15","preferred_time":"15:00"}
+2026-08-08 15:52:54.612 | INFO     | tools:book_site_visit:220 - TOOL book_site_visit — call_sid=harness-41032 date='2026-08-15' time='15:00' notes=None
+2026-08-08 15:52:54.618 | INFO     | tools:_set_session_flag:152 - Redis session:call:harness-41032 end_call_tool_invoked=false
+2026-08-08 15:52:54.620 | INFO     | tools:_set_session_flag:152 - Redis session:call:harness-41032 site_visit_booked=true
+2026-08-08 15:52:54.622 | INFO     | tools:_set_session_flag:152 - Redis session:call:harness-41032 site_visit_date=2026-08-15
+  [TOOL RESULT] {"status": "booked", "preferred_date": "2026-08-15", "preferred_time": "15:00"}
+Bot: I've booked your site visit for Saturday, the 15th of August at 3 PM. If you have any questions or need to change the time, just let me know. Looking forward to welcoming you to Meridian Heights!
+
+You: Yes please book that.
+Bot: Your site visit is confirmed for Saturday, the 15th of August at 3 PM. If anything changes, feel free to reach out. See you at Meridian Heights!
+
+
+[prompt_harness] redis session:call:harness-41032:
+  {
+  "end_call_tool_invoked": "false",
+  "site_visit_booked": "true",
+  "site_visit_date": "2026-08-15"
+}
+  ttl=14398s
