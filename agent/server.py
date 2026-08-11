@@ -75,10 +75,11 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="NXLYR Exotel Agent", lifespan=lifespan)
 
 # No CORSMiddleware here, deliberately. The reference adds a permissive
-# allow_origins=["*"] block for browser testing, but every caller of this service
-# is server-side — Exotel's webhook and Exotel's media stream. There is no browser
-# origin to allow, so the middleware would only widen the surface. Say the word if
-# a dashboard ends up calling /start directly and we'll add a scoped origin list.
+# allow_origins=["*"] block for browser testing, but /start and the Exotel
+# webhook/media-stream callers are server-side and must not receive browser CORS
+# access. The public /demo/call route is the sole exception: its narrowly scoped
+# CORS headers are handled one layer up in infra/nginx/api.infrasmith.dev.conf,
+# where only https://nxlyr.vercel.app may POST to that route.
 
 
 class StartCallRequest(BaseModel):

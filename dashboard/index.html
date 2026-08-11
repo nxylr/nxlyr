@@ -293,7 +293,7 @@
 
         <div class="form-panel">
           <p class="form-kicker"><span class="phone-glyph" aria-hidden="true">☎</span>Try the live demo</p>
-          <form id="demo-form" action="/demo/call" method="post" novalidate>
+          <form id="demo-form" action="https://api.infrasmith.dev/demo/call" method="post" novalidate>
             <label for="phone">Indian mobile number</label>
             <div class="input-row">
               <input
@@ -322,6 +322,7 @@
     const phoneInput = document.getElementById('phone');
     const submitButton = document.getElementById('submit-button');
     const message = document.getElementById('form-message');
+    const demoCallUrl = 'https://api.infrasmith.dev/demo/call';
 
     function normalizeIndianNumber(value) {
       const digits = value.replace(/\D/g, '');
@@ -355,15 +356,27 @@
       submitButton.textContent = 'Requesting call…';
 
       try {
-        const response = await fetch(form.action, {
+        const response = await fetch(demoCallUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-          body: JSON.stringify({ phone })
+          body: JSON.stringify({ phone_number: phone })
         });
 
-        if (!response.ok) throw new Error(`Request failed (${response.status})`);
-        showMessage("You'll receive a call within 60 seconds", 'success');
-        form.reset();
+        const payload = await response.json().catch(() => ({}));
+
+        if (response.status === 200 && payload.status === 'success' && payload.type === 'call_triggered') {
+          showMessage("Your demo call is on its way. Please answer within 60 seconds.", 'success');
+          form.reset();
+        } else if (response.status === 429 && payload.type === 'rate_limited' && payload.error === 'rate_limit_exceeded') {
+          showMessage(payload.detail || 'Demo-call capacity has been reached. Please try again tomorrow.', 'error');
+        } else if (response.status === 400 && payload.type === 'invalid_phone_number' && payload.error === 'invalid_phone_number') {
+          showMessage(payload.detail || 'Enter a valid phone number in international format.', 'error');
+          phoneInput.focus();
+        } else if ((response.status === 500 || response.status === 502) && payload.status === 'error') {
+          showMessage(payload.detail || 'We could not start your demo call. Please try again later.', 'error');
+        } else {
+          showMessage('We could not request your demo call right now. Please try again shortly.', 'error');
+        }
       } catch (error) {
         showMessage('We could not request your demo call right now. Please try again shortly.', 'error');
       } finally {
