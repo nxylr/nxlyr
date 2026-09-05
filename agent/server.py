@@ -6,6 +6,7 @@ Four routes:
   GET  /health — liveness probe for the container HEALTHCHECK.
   POST /start  — initiate an outbound call via Exotel's Connect API.
   POST /demo/call — rate-limited, public demo wrapper around /start's call path.
+  POST /contact — rate-limited, public contact-form capture endpoint.
   WS   /ws     — the endpoint Exotel's App Bazaar "Voicebot" applet connects to.
                  Accepts the socket and hands it to bot.run_bot() for the
                  lifetime of one call.
@@ -26,7 +27,7 @@ from typing import Any
 import aiohttp
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request, WebSocket
+from fastapi import BackgroundTasks, FastAPI, Request, WebSocket
 from fastapi.responses import JSONResponse
 from loguru import logger
 from pydantic import BaseModel, Field
@@ -46,8 +47,11 @@ from bot import run_bot
 
 
 E164_PHONE_NUMBER = re.compile(r"^\+[1-9]\d{1,14}$")
+CONTACT_EMAIL = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 DEMO_PHONE_LIMIT = 5
 DEMO_GLOBAL_LIMIT = 50
+CONTACT_EMAIL_LIMIT = 3
+CONTACT_GLOBAL_LIMIT = 100
 DEMO_RATE_LIMIT_TTL_SECONDS = 24 * 60 * 60
 
 
@@ -61,6 +65,13 @@ async def lifespan(app: FastAPI):
     """
     logger.info("Initializing shared aiohttp.ClientSession on app.state.session")
     app.state.session = aiohttp.ClientSession()
+    app.state.telegram_bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
+    app.state.telegram_chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    if not app.state.telegram_bot_token or not app.state.telegram_chat_id:
+        logger.warning(
+            "Contact Telegram notifications are disabled: TELEGRAM_BOT_TOKEN or "
+            "TELEGRAM_CHAT_ID is missing"
+        )
     try:
         yield
     finally:
@@ -77,9 +88,10 @@ app = FastAPI(title="NXLYR Exotel Agent", lifespan=lifespan)
 # No CORSMiddleware here, deliberately. The reference adds a permissive
 # allow_origins=["*"] block for browser testing, but /start and the Exotel
 # webhook/media-stream callers are server-side and must not receive browser CORS
-# access. The public /demo/call route is the sole exception: its narrowly scoped
-# CORS headers are handled one layer up in infra/nginx/api.infrasmith.dev.conf,
-# where only https://nxlyr.vercel.app may POST to that route.
+# access. The public /demo/call and /contact routes are the sole exceptions:
+# their narrowly scoped CORS headers are handled one layer up in
+# infra/nginx/api.infrasmith.dev.conf, where only https://nxlyr.vercel.app may
+# POST to either route.
 
 
 class StartCallRequest(BaseModel):
@@ -100,6 +112,14 @@ class DemoCallRequest(BaseModel):
     # supplied as (for example) null or a JSON number, rather than FastAPI
     # rejecting the request before the endpoint can explain the problem.
     phone_number: Any = Field(default=None)
+
+
+class ContactRequest(BaseModel):
+    """Public contact-form contract; Any preserves our explicit 400 response."""
+
+    name: Any = Field(default=None)
+    email: Any = Field(default=None)
+    company: Any = Field(default=None)
 
 
 # ----------------- API ----------------- #
@@ -301,6 +321,100 @@ async def check_demo_rate_limits(request: Request, phone_number: str) -> str | N
     return None
 
 
+async def check_contact_rate_limits(request: Request, email: str) -> str | None:
+    """Reserve a contact-form slot using the shared Redis client.
+
+    Email keys use a rolling 24-hour window. The dated global key provides a
+    separate daily safety cap. Both counters use Redis INCR, so concurrent
+    requests cannot exceed either limit unnoticed.
+    """
+    redis_client = await get_demo_redis_client(request)
+    email_key = f"contact:rate:email:{email}"
+    global_key = f"contact:rate:global:{datetime.now(timezone.utc).date().isoformat()}"
+
+    email_count = await redis_client.incr(email_key)
+    if email_count == 1:
+        await redis_client.expire(email_key, DEMO_RATE_LIMIT_TTL_SECONDS)
+    if email_count > CONTACT_EMAIL_LIMIT:
+        return "email"
+
+    global_count = await redis_client.incr(global_key)
+    if global_count == 1:
+        await redis_client.expire(global_key, DEMO_RATE_LIMIT_TTL_SECONDS)
+    if global_count > CONTACT_GLOBAL_LIMIT:
+        return "global"
+
+    return None
+
+
+async def store_contact_submission(
+    request: Request, *, name: str, email: str, company: str | None
+) -> None:
+    """Insert a contact submission through Supabase REST using service_role.
+
+    The public browser never receives the service-role key. Database failures
+    intentionally surface as a generic endpoint error rather than exposing
+    Supabase response details to a visitor.
+    """
+    supabase_url = os.getenv("SUPABASE_URL")
+    supabase_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+    if not supabase_url or not supabase_key:
+        raise RuntimeError("Supabase service-role configuration is missing")
+
+    endpoint = f"{supabase_url.rstrip('/')}/rest/v1/contact_submissions"
+    headers = {
+        "apikey": supabase_key,
+        "Authorization": f"Bearer {supabase_key}",
+        "Content-Type": "application/json",
+        "Prefer": "return=minimal",
+    }
+    payload = {"name": name, "email": email, "company": company}
+    session: aiohttp.ClientSession = request.app.state.session
+
+    try:
+        async with session.post(endpoint, headers=headers, json=payload) as response:
+            if response.status not in {200, 201}:
+                raise RuntimeError(f"Supabase REST insert failed with HTTP {response.status}")
+    except Exception:
+        logger.exception("Unable to store contact submission in Supabase")
+        raise
+
+
+async def notify_contact_submission_via_telegram(
+    request: Request, *, name: str, email: str, company: str | None
+) -> None:
+    """Send a best-effort Telegram notification after a stored contact.
+
+    Notifications are intentionally secondary to persistence. Every failure is
+    contained here so a successfully stored contact still returns HTTP 200.
+    """
+    try:
+        bot_token = getattr(request.app.state, "telegram_bot_token", None)
+        chat_id = getattr(request.app.state, "telegram_chat_id", None)
+        if not bot_token or not chat_id:
+            return
+
+        company_suffix = f", {company}" if company else ""
+        text = f"New contact form submission: {name} ({email}){company_suffix}"
+        endpoint = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+        session: aiohttp.ClientSession = request.app.state.session
+        async with session.post(
+            endpoint, json={"chat_id": chat_id, "text": text}
+        ) as response:
+            payload = await response.json(content_type=None)
+            if (
+                response.status != 200
+                or not isinstance(payload, dict)
+                or payload.get("ok") is not True
+            ):
+                logger.warning(
+                    "Telegram contact notification failed with HTTP {}",
+                    response.status,
+                )
+    except Exception:
+        logger.exception("Telegram contact notification failed")
+
+
 def demo_exotel_failure_response(exotel_response: JSONResponse) -> JSONResponse:
     """Translate /start's operational response into the demo's stable contract."""
     payload = json.loads(exotel_response.body)
@@ -375,6 +489,101 @@ async def request_demo_call(request: Request, body: DemoCallRequest) -> JSONResp
             "type": "call_triggered",
             "call_sid": exotel_payload.get("call_sid"),
         },
+    )
+
+
+@app.post("/contact")
+async def submit_contact(
+    request: Request, body: ContactRequest, background_tasks: BackgroundTasks
+) -> JSONResponse:
+    """Validate, rate-limit, and persist a public contact-form submission."""
+    if (
+        not isinstance(body.name, str)
+        or not isinstance(body.email, str)
+        or (body.company is not None and not isinstance(body.company, str))
+    ):
+        return JSONResponse(
+            status_code=400,
+            content={
+                "status": "error",
+                "type": "invalid_contact_submission",
+                "error": "invalid_contact_submission",
+                "detail": "Name and a valid email address are required.",
+            },
+        )
+
+    name = body.name.strip()
+    email = body.email.strip().lower()
+    company = body.company.strip() if isinstance(body.company, str) else None
+    company = company or None
+
+    if not name or not CONTACT_EMAIL.fullmatch(email):
+        return JSONResponse(
+            status_code=400,
+            content={
+                "status": "error",
+                "type": "invalid_contact_submission",
+                "error": "invalid_contact_submission",
+                "detail": "Name and a valid email address are required.",
+            },
+        )
+
+    try:
+        limited_by = await check_contact_rate_limits(request, email)
+    except Exception:
+        logger.exception("Unable to enforce /contact rate limits")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "type": "rate_limit_unavailable",
+                "error": "rate_limit_unavailable",
+                "detail": "Contact submissions are temporarily unavailable. Please try again later.",
+            },
+        )
+
+    if limited_by:
+        return JSONResponse(
+            status_code=429,
+            content={
+                "status": "error",
+                "type": "rate_limited",
+                "error": "rate_limit_exceeded",
+                "limit": limited_by,
+                "detail": (
+                    "This email address has reached its contact-submission limit."
+                    if limited_by == "email"
+                    else "Contact-submission capacity has been reached for today."
+                ),
+            },
+        )
+
+    try:
+        await store_contact_submission(
+            request, name=name, email=email, company=company
+        )
+    except Exception:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "type": "contact_storage_failed",
+                "error": "contact_storage_failed",
+                "detail": "We could not save your details right now. Please try again later.",
+            },
+        )
+
+    background_tasks.add_task(
+        notify_contact_submission_via_telegram,
+        request,
+        name=name,
+        email=email,
+        company=company,
+    )
+
+    return JSONResponse(
+        status_code=200,
+        content={"status": "success", "type": "contact_stored"},
     )
 
 

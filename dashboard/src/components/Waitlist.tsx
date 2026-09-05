@@ -5,6 +5,7 @@ import { CheckCircle2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { submitContact } from "@/lib/contact";
 
 type WaitlistValues = {
   company: string;
@@ -14,15 +15,6 @@ type WaitlistValues = {
 
 type FieldErrors = Partial<Record<keyof WaitlistValues, string>>;
 type SubmissionStatus = "idle" | "submitting" | "success" | "error";
-
-async function submitWaitlistPlaceholder(values: WaitlistValues) {
-  // TODO: no backend endpoint exists yet for waitlist capture — this
-  // currently does not persist anywhere. Needs a real decision on
-  // where this data goes (new API endpoint + Supabase table, or another
-  // mechanism) before this goes live.
-  void values;
-  await new Promise((resolve) => window.setTimeout(resolve, 700));
-}
 
 function validateWaitlist(values: WaitlistValues): FieldErrors {
   const errors: FieldErrors = {};
@@ -46,10 +38,12 @@ export function Waitlist() {
   });
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [status, setStatus] = useState<SubmissionStatus>("idle");
+  const [submissionMessage, setSubmissionMessage] = useState<string | null>(null);
 
   function updateField(field: keyof WaitlistValues, value: string) {
     setValues((current) => ({ ...current, [field]: value }));
     setFieldErrors((current) => ({ ...current, [field]: undefined }));
+    setSubmissionMessage(null);
     if (status === "error") setStatus("idle");
   }
 
@@ -64,12 +58,15 @@ export function Waitlist() {
     }
 
     setStatus("submitting");
+    setSubmissionMessage(null);
 
-    try {
-      await submitWaitlistPlaceholder(values);
+    const result = await submitContact(values);
+    if (result.type === "success") {
       setStatus("success");
-    } catch {
+      setSubmissionMessage(result.text);
+    } else {
       setStatus("error");
+      setSubmissionMessage(result.text);
     }
   }
 
@@ -84,9 +81,6 @@ export function Waitlist() {
           <p className="mt-4 max-w-md text-lg leading-8 text-muted-foreground">
             Tell us about your team and the first conversations you want to improve.
           </p>
-          <p className="mt-4 text-sm leading-6 text-muted-foreground">
-            Review-mode form: submissions are simulated and are not stored anywhere yet.
-          </p>
         </div>
 
         <div className="rounded-xl border border-muted bg-muted/45 p-6">
@@ -94,10 +88,10 @@ export function Waitlist() {
             <div role="status" aria-live="polite" className="flex min-h-64 flex-col justify-center">
               <CheckCircle2 className="size-8 text-secondary" />
               <h3 className="mt-5 text-2xl font-semibold text-foreground">
-                Form state confirmed.
+                Thanks — we’ll be in touch.
               </h3>
               <p className="mt-2 max-w-md text-base leading-7 text-muted-foreground">
-                This is the intended success UI. Your details were not stored because contact-form persistence has not been connected yet.
+                {submissionMessage}
               </p>
               <Button
                 type="button"
@@ -105,7 +99,7 @@ export function Waitlist() {
                 onClick={() => setStatus("idle")}
                 className="mt-6 w-fit"
               >
-                Test the form again
+                Send another message
               </Button>
             </div>
           ) : (
@@ -169,9 +163,9 @@ export function Waitlist() {
                 />
               </div>
 
-              {status === "error" && Object.keys(fieldErrors).length === 0 ? (
+              {status === "error" && submissionMessage ? (
                 <p className="mt-5 text-base text-destructive" role="alert">
-                  The simulated submission could not complete. Please try again.
+                  {submissionMessage}
                 </p>
               ) : null}
 
