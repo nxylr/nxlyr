@@ -125,23 +125,23 @@ def _resources(params: FunctionCallParams) -> CallResources | None:
 
 
 async def _set_session_flag(
-    resources: CallResources | None, field: str, value: str
-) -> None:
-    """HSET one field on the call's Redis session hash, best-effort.
+    resources: CallResources | None, field: str, value: str, tool: str
+) -> bool:
+    """HSET one field on the call's Redis session hash. Returns True iff written.
 
-    Deliberately swallows every Redis error after logging it. This is the
-    opposite of kb_loader.load_kb()'s fail-loud policy, and the difference is
-    intentional: a call cannot proceed without its KB, but it proceeds fine
-    without an analytics flag. Letting a Redis blip abort a live conversation
-    with a real buyer would be a far worse failure than the degraded drop
-    classification we get from a missing flag.
+    Still never raises: a Redis blip must not abort a live conversation with a
+    real buyer (the opposite of kb_loader.load_kb()'s fail-loud policy, because
+    a call cannot proceed without its KB but proceeds fine without an
+    analytics flag). What it no longer does is hide the failure — the bool is
+    what lets each tool tell the model whether anything was actually recorded.
+
+    On failure only the exception class name and the tool name are logged:
+    exception messages from redis can embed the connection string, and the
+    value written can be caller-supplied text.
     """
     if resources is None or resources.redis is None:
-        logger.warning(
-            f"No Redis client available — skipping {field}={value} "
-            f"(call_sid={resources.call_sid if resources else None})"
-        )
-        return
+        logger.warning(f"{tool}: no Redis client available — {field} not recorded")
+        return False
 
     try:
         await resources.redis.hset(resources.session_key, field, value)
@@ -150,11 +150,24 @@ async def _set_session_flag(
         # re-arming a 4h TTL mid-call is harmless.
         await resources.redis.expire(resources.session_key, SESSION_TTL_SECONDS)
         logger.info(f"Redis {resources.session_key} {field}={value}")
+        return True
     except Exception as e:
         logger.error(
-            f"Failed to set {field}={value} on {resources.session_key}: {e} "
+            f"{tool}: session flag write failed ({type(e).__name__}) "
             "— call continues, post-call classification will be degraded"
         )
+        return False
+
+
+def _tool_result(recorded: bool, guidance: str) -> dict:
+    """The one result shape every state-writing tool returns to the model.
+
+    `recorded` is whether the request was durably noted. `notified` is whether
+    a human has been told about it; nothing in this codebase notifies anyone
+    yet, so it is False everywhere until a later change wires that up.
+    `guidance` is the only thing the model may build its spoken reply on.
+    """
+    return {"recorded": recorded, "notified": False, "guidance": guidance}
 
 
 # ---------------------------------------------------------------------------
@@ -208,9 +221,11 @@ async def book_site_visit(params: FunctionCallParams) -> None:
     Persistence to the leads table (UPDATE lead SET status='site_visit_booked',
     site_visit_date=...) is Flow 2's job (03_SOFTWARE_FLOW.md:187-190) and
     depends on the Supabase call/lead records that Week 5's call-worker
-    creates. Until those exist this logs the booking as a structured event and
-    reports success to the model, so the confirmation the bot speaks is at
-    least backed by a real, greppable record rather than by nothing at all.
+    creates. Until those exist this only notes the request in the Redis session
+    hash and tells the model so via the {recorded, notified, guidance} contract.
+    It never reports a booking: nothing confirms the visit and nobody is
+    notified, so the model is told to say the request was noted, and to say so
+    only when every write landed.
     """
     resources = _resources(params)
     preferred_date = params.arguments.get("preferred_date")
@@ -238,31 +253,55 @@ async def book_site_visit(params: FunctionCallParams) -> None:
             f"TOOL book_site_visit REJECTED — {date_error} "
             f"(call_sid={resources.call_sid if resources else None})"
         )
-        await params.result_callback({"status": "error", "error": date_error})
+        await params.result_callback(
+            _tool_result(False, f"Nothing was recorded. {date_error}")
+        )
         return
 
     # Explicitly false, not merely absent. 03_SOFTWARE_FLOW.md:190 calls this
     # out: a booking is not a call ending — the conversation may well continue
     # after it — so Flow 3 must not read a successful booking as a clean close.
-    await _set_session_flag(resources, "end_call_tool_invoked", "false")
-    await _set_session_flag(resources, "site_visit_booked", "true")
-    if preferred_date:
-        await _set_session_flag(resources, "site_visit_date", str(preferred_date))
+    #
+    # Every write is attempted and `recorded` is True only if all of them
+    # landed: a half-written session hash is not a recorded request.
+    writes = [
+        await _set_session_flag(
+            resources, "end_call_tool_invoked", "false", "book_site_visit"
+        ),
+        await _set_session_flag(
+            resources, "site_visit_booked", "true", "book_site_visit"
+        ),
+        await _set_session_flag(
+            resources, "site_visit_date", str(preferred_date), "book_site_visit"
+        ),
+    ]
+    recorded = all(writes)
 
-    await params.result_callback(
-        {
-            "status": "booked",
-            "preferred_date": preferred_date,
-            "preferred_time": preferred_time,
-        }
-    )
+    guidance = VISIT_RECORDED_GUIDANCE if recorded else VISIT_FAILED_GUIDANCE
+    await params.result_callback(_tool_result(recorded, guidance))
 
+
+VISIT_RECORDED_GUIDANCE = (
+    "Tell the caller you have noted their request for a site visit. Repeat "
+    "back only the date and time the caller gave you. Do not say it is "
+    "booked, confirmed, scheduled or reserved, and do not say anyone will "
+    "call, confirm or follow up."
+)
+VISIT_FAILED_GUIDANCE = (
+    "Tell the caller you could not note this request right now. Offer to try "
+    "again, or suggest they contact the team directly."
+)
 
 BOOK_SITE_VISIT_SCHEMA = FunctionSchema(
     name="book_site_visit",
     description=(
         "Call this when the lead has explicitly agreed to a site visit and "
-        "provided a date or time preference."
+        "provided a date or time preference. This only notes the request; it "
+        "does not book or confirm a visit. Returns {recorded, notified, "
+        "guidance}: recorded says whether the request was noted, notified is "
+        "false unless a human has actually been told, and guidance is what "
+        "you may say to the caller. Never say the visit is booked, confirmed "
+        "or scheduled."
     ),
     properties={
         "preferred_date": {"type": "string", "description": "YYYY-MM-DD"},
@@ -289,10 +328,10 @@ async def transfer_to_human(params: FunctionCallParams) -> None:
 
     The actual Exotel call bridge (03_SOFTWARE_FLOW.md:192-195) needs a
     configured human-agent DID and Exotel's bridge API, neither of which is
-    wired up yet. Logging the transfer request with its full context summary is
-    the honest interim behaviour: the model gets a truthful "requested, not yet
-    connected" result rather than a fabricated success, so it says something it
-    can actually stand behind.
+    wired up yet. Noting the request in the session hash (and logging its
+    context summary) is the honest interim behaviour: the model gets a truthful
+    {recorded, notified: False, guidance} result that says no transfer exists,
+    rather than a fabricated success.
     """
     resources = _resources(params)
     reason = params.arguments.get("reason")
@@ -303,36 +342,49 @@ async def transfer_to_human(params: FunctionCallParams) -> None:
         f"reason={reason!r} context_summary={context_summary!r}"
     )
 
-    await _set_session_flag(resources, "transfer_requested", "true")
+    writes = [
+        await _set_session_flag(
+            resources, "transfer_requested", "true", "transfer_to_human"
+        )
+    ]
     if reason:
-        await _set_session_flag(resources, "transfer_reason", str(reason))
+        writes.append(
+            await _set_session_flag(
+                resources, "transfer_reason", str(reason), "transfer_to_human"
+            )
+        )
+    recorded = all(writes)
 
-    # next_step spells out in the result what bridge_connected=False implies,
-    # rather than leaving the model to infer it. On the first Task 4.1 harness
-    # run it read the honest `bridge_connected: false` and still told the
-    # caller "they'll be reaching out to you shortly" — nobody was going to.
-    # The [TOOLS] prompt block is the primary fix; this puts the same
-    # correction directly in the model's context at the moment it composes the
-    # handoff sentence.
-    await params.result_callback(
-        {
-            "status": "transfer_requested",
-            "bridge_connected": False,
-            "reason": reason,
-            "next_step": (
-                "Logged for a colleague to pick up. Nobody is on the line and "
-                "no callback is scheduled yet — tell the caller a colleague "
-                "will get back to them, and do not promise a timeframe."
-            ),
-        }
-    )
+    # On the first Task 4.1 harness run the model read the honest
+    # `bridge_connected: false` and still told the caller "they'll be reaching
+    # out to you shortly" — nobody was going to. The guidance is therefore
+    # spelled out in the result, at the moment the model composes the handoff
+    # sentence, and says outright that no live transfer exists.
+    guidance = TRANSFER_RECORDED_GUIDANCE if recorded else TRANSFER_FAILED_GUIDANCE
+    await params.result_callback(_tool_result(recorded, guidance))
 
+
+TRANSFER_RECORDED_GUIDANCE = (
+    "Tell the caller you have noted that they want to speak to a colleague. "
+    "There is no live transfer: nobody is on the line and nobody has been "
+    "notified. Do not say you are transferring or connecting them, and do not "
+    "say anyone will call, follow up or get back to them."
+)
+TRANSFER_FAILED_GUIDANCE = (
+    "Tell the caller you could not note this request right now. Offer to try "
+    "again, or suggest they contact the team directly."
+)
 
 TRANSFER_TO_HUMAN_SCHEMA = FunctionSchema(
     name="transfer_to_human",
     description=(
         "Call this when the lead asks something outside your scope — legal "
-        "questions, negotiation, complaints, or requests to speak with a manager."
+        "questions, negotiation, complaints, or requests to speak with a manager. "
+        "This only notes the request; there is no live transfer. Returns "
+        "{recorded, notified, guidance}: recorded says whether the request was "
+        "noted, notified is false unless a human has actually been told, and "
+        "guidance is what you may say to the caller. Never say you are "
+        "transferring or connecting the caller."
     ),
     properties={
         "reason": {"type": "string"},
@@ -406,9 +458,18 @@ async def end_call(params: FunctionCallParams) -> None:
     # Written before the goodbye is spoken, deliberately: if the carrier tears
     # the leg down during the closing phrase, the ending was still clean and the
     # flag should already say so.
-    await _set_session_flag(resources, "end_call_tool_invoked", "true")
-    if outcome:
-        await _set_session_flag(resources, "call_outcome", str(outcome))
+    flag_written = await _set_session_flag(
+        resources, "end_call_tool_invoked", "true", "end_call"
+    )
+    outcome_written = (
+        await _set_session_flag(resources, "call_outcome", str(outcome), "end_call")
+        if outcome
+        else None
+    )
+    logger.info(
+        f"end_call: flag write results end_call_tool_invoked={flag_written} "
+        f"call_outcome={outcome_written}"
+    )
 
     # No PipelineWorker under prompt_harness.py — the flag write and the
     # outcome logging above are the testable part there; the shutdown is not.

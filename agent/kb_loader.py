@@ -1,8 +1,10 @@
 import os
+import re
 import time
 import requests
 from typing import Dict, Any
 from dotenv import load_dotenv
+from loguru import logger
 
 # Load environment variables from .env if present
 load_dotenv()
@@ -14,6 +16,33 @@ load_dotenv()
 # call, but an edit is picked up within one cache lifetime.
 _KB_CACHE_TTL_SECONDS = 300
 _kb_cache: Dict[str, tuple] = {}  # project_slug -> (cached_at_monotonic, config)
+
+
+# Phrases that, spoken by the agent, promise something the product cannot
+# deliver (it cannot send materials, and nothing guarantees a delivery time).
+# A KB containing one will be read out as fact, so it is flagged at fetch time.
+_PROMISE_PATTERNS = ("whatsapp", "brochure", "right away", "right after", "immediately")
+
+
+def _warn_on_promise_text(node: Any, path: str = "") -> None:
+    """Log a WARNING per (field path, pattern) hit in the KB. Never raises.
+
+    Only the path and the pattern name are logged, never the matched text: KB
+    values are free-form and may carry anything. The KB itself is not altered.
+    """
+    if isinstance(node, str):
+        for pattern in _PROMISE_PATTERNS:
+            if re.search(pattern, node, re.IGNORECASE):
+                logger.warning(
+                    f"KB field {path or '<root>'} matches promise pattern "
+                    f"{pattern!r} — the agent may repeat an unfulfillable promise"
+                )
+    elif isinstance(node, dict):
+        for key, value in node.items():
+            _warn_on_promise_text(value, f"{path}.{key}" if path else str(key))
+    elif isinstance(node, list):
+        for i, value in enumerate(node):
+            _warn_on_promise_text(value, f"{path}[{i}]")
 
 
 def load_kb(project_slug: str) -> Dict[str, Any]:
@@ -90,4 +119,5 @@ def _fetch_kb(project_slug: str) -> Dict[str, Any]:
             f"Project KB config for tenant slug '{project_slug}' (Project ID: {project_data.get('id')}) is empty or invalid"
         )
 
+    _warn_on_promise_text(config)
     return config
