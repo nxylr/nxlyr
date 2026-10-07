@@ -2,13 +2,14 @@ import unittest
 from unittest.mock import patch, MagicMock
 import os
 
+from agent import kb_loader
 from agent.kb_loader import load_kb
 
 
 class TestKBLoader(unittest.TestCase):
 
     def setUp(self):
-        load_kb.cache_clear()
+        kb_loader._kb_cache.clear()
 
     @patch.dict(os.environ, {}, clear=True)
     def test_missing_env_vars_raises_value_error(self):
