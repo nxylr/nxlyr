@@ -141,8 +141,8 @@ export function Hero() {
               <span className="relative size-3 rounded-full bg-primary" />
             </span>
             <p className="text-xs font-medium uppercase tracking-[0.16em] sm:text-sm">
-              System Active<span className="sr-only"> — </span>
-              <span className="mt-1.5 block text-[0.65rem] tracking-[0.2em] sm:text-xs">Inbound Routing</span>
+              Public demo<span className="sr-only"> — </span>
+              <span className="mt-1.5 block text-[0.65rem] tracking-[0.2em] sm:text-xs">Outbound call</span>
             </p>
           </div>
         </div>
@@ -197,7 +197,7 @@ export function Hero() {
                         Try the live demo
                       </p>
                       <p className="mt-1 text-[clamp(0.72rem,1.2vw,0.88rem)] leading-5 text-brand-cream/55">
-                        A real call, usually within 60 seconds.
+                        A real call to your phone.
                       </p>
                     </div>
 
@@ -292,15 +292,15 @@ export function Hero() {
 
         <div className="mx-auto w-full max-w-2xl lg:text-right">
           <p className="max-w-xl font-serif text-2xl leading-snug text-muted-foreground lg:ml-auto sm:text-3xl">
-            Lead intent drops sharply after five minutes without contact. NXLYR lets a prospect hear from you while their enquiry still has momentum.
+            In the demo, an AI voice agent calls your phone and talks about one fictional project.
           </p>
           <dl className="mt-7 border-t border-border/60 pt-5 lg:ml-auto">
             {/* The proposed <650ms claim is withheld: agent/week2_latency.csv
                 records 60 round trips with a 1781.8ms median. Add a latency
                 callout only after a representative benchmark supports it. */}
             <div className="flex flex-col gap-2">
-              <dt className="order-2 text-xs uppercase tracking-[0.1em] text-primary sm:text-sm">Instant inbound pickup</dt>
-              <dd className="font-serif text-3xl text-foreground sm:text-4xl">24/7/365</dd>
+              <dt className="order-2 text-xs uppercase tracking-[0.1em] text-primary sm:text-sm">Call direction</dt>
+              <dd className="font-serif text-3xl text-foreground sm:text-4xl">Outbound</dd>
             </div>
           </dl>
           <AnimatePresence initial={false}>

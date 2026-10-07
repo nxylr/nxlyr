@@ -17,7 +17,7 @@ export function Footer() {
           render={<a href="#demo" />}
           nativeButton={false}
         >
-          Request a guided walkthrough <ArrowRight className="size-3.5" />
+          Try the demo call <ArrowRight className="size-3.5" />
         </Button>
       </div>
     </footer>

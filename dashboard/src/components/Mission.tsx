@@ -8,25 +8,25 @@ const missionCards = [
     icon: Focus,
     title: "Free your sales team to close, not dial",
     description:
-      "NXLYR handles the first-call workload so human sales staff can focus on converting the buyers already standing on-site.",
+      "We are building NXLYR to take on the first-call workload so human sales staff can focus on buyers who are ready to talk.",
   },
   {
     icon: PhoneForwarded,
-    title: "Every lead gets an instant, consistent first conversation",
+    title: "Our goal: a prompt first conversation for every lead",
     description:
-      "Every enquiry receives a useful first response while intent is fresh, instead of falling through the cracks waiting for a callback.",
+      "We want every enquiry to get a useful first response while interest is fresh. Today you can try this through the public demo call.",
   },
   {
     icon: ShieldCheck,
-    title: "Data stays with you",
+    title: "Who handles your data",
     description:
-      "Lead data is handled under India’s DPDP Act and is not shared with brokers or other third parties.",
+      "To deliver this demo we use third-party providers: Exotel (calls), Deepgram (speech-to-text), OpenAI (language), ElevenLabs (voice), Supabase (storage), Vercel (hosting) and Telegram (internal notifications).",
   },
   {
     icon: MapPinned,
-    title: "Built for how Indian real estate actually sells",
+    title: "Focused on Indian real estate",
     description:
-      "This is not a generic voice-AI wrapper. The product is being tuned for the projects, buyer questions, site visits, and handoffs specific to this market.",
+      "We are building for Indian real-estate developers, starting with a demo that calls Indian mobile numbers and talks about a property project.",
   },
 ];
 

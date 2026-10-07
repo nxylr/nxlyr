@@ -52,7 +52,7 @@ const STAGE_TIMINGS_MS: Partial<Record<PipelineStage, number>> = {
 
 const fanNodes = [
   "Intent clarification",
-  "Booking site visit",
+  "Booking site visit (planned)",
   "Answering questions",
   "Clarifying project technicalities",
   "Call drops",
@@ -251,9 +251,9 @@ function LeadNode({ visible }: { visible: boolean }) {
       transition={{ duration: 0.5 }}
       className="rounded-xl border border-primary bg-primary px-4 py-3 text-center text-primary-foreground shadow-lg shadow-primary/20"
     >
-      <span className="block text-base font-semibold">Trigger a Lead</span>
+      <span className="block text-base font-semibold">Lead request</span>
       <span className="mt-0.5 block text-sm opacity-80">
-        Lead comes in · Registered in database
+        Visitor asks for a call
       </span>
       <ArrowRight className="mx-auto mt-2 size-3.5 rotate-90 md:rotate-0" />
     </motion.div>
@@ -355,7 +355,7 @@ function DesktopPipeline({ stage }: { stage: PipelineStage }) {
         <PipelineNode
           icon={<PhoneCall className="size-4" />}
           label="Agent calls the number"
-          description={snapshot.retryActive ? "Fresh call attempt" : "Within 60 seconds"}
+          description={snapshot.retryActive ? "Fresh call attempt" : "Outbound call"}
           pulse={inStage(stage, "connecting", "retryConnecting")}
           visible={snapshot.agentVisible}
         />
@@ -406,8 +406,8 @@ function DesktopPipeline({ stage }: { stage: PipelineStage }) {
       <div className="absolute left-[67%] top-1/2 z-10 w-[16%] -translate-y-1/2 [--pipeline-node-color:var(--secondary)]">
         <PipelineNode
           icon={<FileText className="size-4" />}
-          label="Sending transcript"
-          description="Call context moves upstream"
+          label="Transcript hand-off (planned)"
+          description="Not built yet"
           visible={snapshot.transcriptVisible}
         />
       </div>
@@ -415,8 +415,8 @@ function DesktopPipeline({ stage }: { stage: PipelineStage }) {
       <div className="absolute right-[1.5%] top-1/2 z-10 w-[14%] -translate-y-1/2 [--pipeline-node-color:var(--secondary)]">
         <PipelineNode
           icon={<Database className="size-4" />}
-          label="Updated CRM"
-          description="Ready for human follow-up"
+          label="CRM update (planned)"
+          description="Not built yet"
           visible={snapshot.crmVisible}
         />
       </div>
@@ -488,7 +488,7 @@ function MobilePipeline({ stage }: { stage: PipelineStage }) {
           <PipelineNode
             icon={<PhoneCall className="size-4" />}
             label="Agent calls the number"
-            description={snapshot.retryActive ? "Fresh call attempt" : "Within 60 seconds"}
+            description={snapshot.retryActive ? "Fresh call attempt" : "Outbound call"}
             pulse={inStage(stage, "connecting", "retryConnecting")}
             visible={snapshot.agentVisible}
           />
@@ -609,8 +609,8 @@ function MobilePipeline({ stage }: { stage: PipelineStage }) {
         <div className="mx-auto w-52 [--pipeline-node-color:var(--secondary)]">
           <PipelineNode
             icon={<FileText className="size-4" />}
-            label="Sending transcript"
-            description="Call context moves upstream"
+            label="Transcript hand-off (planned)"
+            description="Not built yet"
             visible={snapshot.transcriptVisible}
           />
         </div>
@@ -620,8 +620,8 @@ function MobilePipeline({ stage }: { stage: PipelineStage }) {
         <div className="mx-auto w-48 [--pipeline-node-color:var(--secondary)]">
           <PipelineNode
             icon={<Database className="size-4" />}
-            label="Updated CRM"
-            description="Ready for human follow-up"
+            label="CRM update (planned)"
+            description="Not built yet"
             visible={snapshot.crmVisible}
           />
         </div>
@@ -647,7 +647,7 @@ function TriggerGate({
       className="h-12 rounded-xl px-5 shadow-xl shadow-primary/25"
     >
       <Sparkles data-icon="inline-start" />
-      Trigger a Lead
+      Play the illustration
     </Button>
   );
 
@@ -791,13 +791,13 @@ export function HowItWorks() {
       <div className="mx-auto max-w-6xl px-6 lg:px-8">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div>
-            <p className="text-base font-medium text-primary">How the pipeline works</p>
+            <p className="text-base font-medium text-primary">Illustrative flow · scripted, not live data</p>
             <h2 className="mt-3 max-w-2xl text-4xl font-semibold tracking-[-0.045em] text-foreground sm:text-5xl">
-              Follow one lead from trigger to an updated CRM.
+              An illustration of how a lead could move through NXLYR.
             </h2>
           </div>
           <p className="max-w-sm text-base leading-7 text-muted-foreground">
-            The first run is scripted to show how the agent recovers when a call drops.
+            This animation is scripted and does not show real calls or data. Steps marked “planned” are not built yet.
           </p>
         </div>
 
@@ -827,7 +827,7 @@ export function HowItWorks() {
         >
           <Button variant="outline" onClick={replaySequence}>
             {shouldReduceMotion ? <Check /> : <RotateCcw />}
-            Experience the pipeline again
+            Replay the illustration
           </Button>
         </motion.div>
       </div>

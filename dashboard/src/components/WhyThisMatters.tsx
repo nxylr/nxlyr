@@ -25,19 +25,13 @@ const problems: Array<{
     kind: "response",
     title: "No instant response",
     description:
-      "Average developer callback times run from 15–240 minutes, even though lead intent drops sharply after five minutes without contact.",
+      "Enquiries that wait for a callback can lose momentum.",
   },
   {
     kind: "parallel",
     title: "Human callers can’t parallelize",
     description:
       "One pre-sales agent can only be on one call at a time. Every other fresh lead waits for that conversation to finish.",
-  },
-  {
-    kind: "leak",
-    title: "Data leaks to brokers",
-    description:
-      "Leads have been documented reaching competing developers and brokers before the original developer’s own team calls back.",
   },
   {
     kind: "scale",
@@ -166,8 +160,8 @@ export function WhyThisMatters() {
         <div className="mt-12 grid gap-px overflow-hidden rounded-xl border border-brand-cream/10 bg-brand-cream/10 sm:grid-cols-3">
           {[
             { icon: Building2, label: "Built for Indian real estate" },
-            { icon: BadgeCheck, label: "DPDP-compliant" },
-            { icon: Phone, label: "Live on real phone lines" },
+            { icon: BadgeCheck, label: "Demo built around one fictional project" },
+            { icon: Phone, label: "Public demo on a real phone line" },
           ].map(({ icon: Icon, label }) => (
             <div
               className="flex items-center justify-center gap-2.5 bg-brand-base px-5 py-5 text-base text-brand-cream/70"

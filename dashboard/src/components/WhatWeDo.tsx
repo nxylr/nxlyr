@@ -17,16 +17,16 @@ export function WhatWeDo() {
             </span>
             <h3 className="mt-4 text-xl font-semibold text-foreground">A useful first conversation</h3>
             <p className="mt-2 text-lg leading-8 text-muted-foreground">
-              The agent responds on a real phone line and qualifies the buyer against the specific project.
+              In the demo, an AI voice agent calls your phone and talks about one fictional project.
             </p>
           </div>
           <div className="bg-background/70 p-7">
             <span className="grid size-8 place-items-center rounded-md bg-muted/60 text-primary">
               <ArrowUpRight className="size-4" />
             </span>
-            <h3 className="mt-4 text-xl font-semibold text-foreground">A clearer human handoff</h3>
+            <h3 className="mt-4 text-xl font-semibold text-foreground">Where we are heading</h3>
             <p className="mt-2 text-lg leading-8 text-muted-foreground">
-              Your team receives intent, context, and the next requested action before taking over.
+              Handoff to your sales team is planned but not built yet.
             </p>
           </div>
         </div>

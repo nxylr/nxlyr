@@ -1,4 +1,4 @@
-import { CalendarCheck, CircleUserRound, FileText, Headphones } from "lucide-react";
+import { FileText, Headphones } from "lucide-react";
 
 import { Card, CardContent } from "@/components/ui/card";
 
@@ -6,22 +6,12 @@ const capabilities = [
   {
     icon: FileText,
     title: "Project-aware answers",
-    description: "Discusses the specific project’s pricing, floor plans, and amenities.",
-  },
-  {
-    icon: CircleUserRound,
-    title: "Intent qualification",
-    description: "Distinguishes end-user needs from investor intent before a salesperson follows up.",
-  },
-  {
-    icon: CalendarCheck,
-    title: "Site-visit booking",
-    description: "Captures a preferred time for the next site visit in the flow of the call.",
+    description: "In the demo, the agent talks about one fictional project, Meridian Heights.",
   },
   {
     icon: Headphones,
-    title: "Human escalation",
-    description: "Routes nuanced or out-of-scope conversations to the right person when appropriate.",
+    title: "A real outbound call",
+    description: "Enter an Indian mobile number and an AI voice agent calls you.",
   },
 ];
 
@@ -35,7 +25,7 @@ export function Features() {
             The practical parts of the first sales conversation.
           </h2>
           <p className="mt-4 text-lg leading-8 text-muted-foreground">
-            Each capability supports the handoff to a real salesperson; it does not replace their judgement.
+            This is what the public demo does today.
           </p>
         </div>
         <div className="mt-10 grid gap-4 sm:grid-cols-2">
