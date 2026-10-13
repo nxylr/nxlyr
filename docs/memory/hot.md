@@ -16,12 +16,12 @@ _Last updated: 2026-10-13 by memory close-out (task 002). Update at the end of e
 - Task 002 — memory close-out for task 001 (docs/memory, AGENTS.md Commands, `new-task.sh --no-track`). In review.
 
 ## Next
-1. Authenticate or remove `/start` (unauthenticated; places a call with no binding, so `/ws` refuses it under enforce).
-2. Sandbox/test pipeline so new features can be tested without touching live `main`.
-3. Transcript storage + tools persistence.
-4. After a day of clean enforce running: flip the `WS_AUTH_MODE` code default to `enforce`, or add a startup warning when running in log mode. The switch currently lives only in the VPS `.env`, so a deploy without it silently runs in log mode.
-5. Planned maintenance window: VPS shows "System restart required" and 50 pending updates. Confirm compose restart policies for `agent` and `redis` (repo copy: `unless-stopped` / `always`; verify on the VPS), then reboot at a quiet hour and check container health twice.
-6. Fix the 5 pre-existing `test_kb_loader` failures on `main` (F23).
+Plan for 2026-10-14, in order:
+1. **F02 — lock down `/demo/call`:** Indian mobiles only, consent stored in `consents`, per-number and per-IP caps, kill switch.
+2. **Conversation harness, then prompt v2:** short turns, ask before pitching, honest AI disclosure, no brochure/WhatsApp promises, prompt moved out of `bot.py`.
+3. **Real tools:** write `commitments` rows keyed by call SID, truthful tool results, Telegram notification. The founder reviews and runs migration `20261007000000_phase0_commitments_consents.sql` first (log says the tables were applied in prod 2026-10-07 and the file is uncommitted — reconcile before building).
+4. **Latency:** preload the KB (F06), turn-release stall (F07).
+5. **Hygiene batch:** authenticate or remove `/start`; log hygiene (`diagnose=False`); `WS_AUTH_MODE` code default to `enforce`; reboot window (VPS "System restart required", 50 pending updates; confirm compose restart policies for `agent`/`redis`, then reboot at a quiet hour and check health twice); fix the `new-task.sh`/`finish-task.sh` worktree footgun (they build the worktree path from `--show-toplevel`; use `--git-common-dir`); GitHub branch protection; F23 `test_kb_loader` errors.
 
 ## Human-only pending
 - Send Exotel email (DND / 140xx question).

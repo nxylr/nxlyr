@@ -28,4 +28,4 @@ F02 `/demo/call` dials any E.164, no consent/DND check · F03 bookings only in R
 
 ## Unproven assumptions
 - UNVERIFIED: Exotel DND screening applies to our ExoPhone (regular 011 number) vs. required 140xx for promotional calls — question sent/pending to Exotel.
-- UNVERIFIED: whether editing the VPS `.env` loses any redis state (the container is recreated; see `inbox/2026-10-13-env-edit-recreates-redis.md`).
+- Likely, not proven: redis data survives a `.env`-triggered container recreate (`nxlyr_redis_data` volume present; `DBSIZE` was 7 right after one). See `inbox/2026-10-13-env-edit-recreates-redis.md`.
