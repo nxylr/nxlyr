@@ -37,7 +37,7 @@ fi
 
 mkdir -p "$BASE"
 git -C "$ROOT" fetch origin main
-git -C "$ROOT" worktree add -b "$BRANCH" "$DIR" origin/main
+git -C "$ROOT" worktree add --no-track -b "$BRANCH" "$DIR" origin/main
 
 echo
 echo "Worktree ready: $DIR"
