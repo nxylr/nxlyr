@@ -87,10 +87,15 @@ Agents have no memory between sessions. Read these at session start, in order:
 ## Commands (verify they work; fix this section if not)
 
 ```bash
-# backend unit test (from repository root; after installing agent/requirements.txt)
-python -m unittest agent.test_kb_loader   # mocked Supabase requests; no live service
-# backend import smoke (from agent/; after installing agent/requirements.txt)
-python -c "import server, week2_latency_observer"  # matches Dockerfile
+# The Python venv (agent/venv, Python 3.12) exists ONLY in the main checkout: it is gitignored,
+# so worktrees have none. From a worktree, point at the main checkout's interpreter.
+MAIN="$(cd "$(git rev-parse --git-common-dir)/.." && pwd)"
+PY="$MAIN/agent/venv/bin/python"
+# backend unit tests (from the repository/worktree root)
+"$PY" -m unittest agent.test_ws_auth      # F01 admission tests; mocked Redis, no live service
+"$PY" -m unittest agent.test_kb_loader    # 5 known errors on main (F23): setUp calls load_kb.cache_clear, which load_kb lacks
+# backend import smoke (from agent/ of the worktree)
+(cd agent && "$PY" -c "import server, week2_latency_observer")  # matches Dockerfile
 # No backend Ruff command yet: Ruff has no repository config or declared dependency.
 # The current CI target (ruff check api/) is stale because api/ does not exist.
 # frontend (from dashboard/)

@@ -9,3 +9,5 @@
 | 2026-10 | Codex stopped on `npm ci` audit warnings. | Audit warnings are not blockers; continue, run `npm audit --omit=dev` read-only. |
 | 2026-10 | Pitch deck contained fabricated stats and template residue. | Every number needs a source in `product.md`. |
 | 2026-10 | zsh treats `#` in interactive commands as an argument. | Don't put inline comments in pasted shell commands. |
+| 2026-10-13 | `new-task.sh` created task branches tracking `origin/main`, so a bare `git push` would target `main`. | `git worktree add --no-track`; always push with `git push -u origin task/<slug>`. |
+| 2026-10-13 | `grep` with an unmatched shell glob (`--include=*.ts`) aborted the whole zsh command. | Quote globs or pass directories, not unexpanded patterns, in grep commands. |
