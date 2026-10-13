@@ -52,3 +52,9 @@ snapshot_before.txt
 sanity_check_post_fixes*.csv
 network_latency_check.sh
 turn_diagnostic*
+
+# --- agent workflow additions ---
+.claude/settings.local.json
+.claude/worktrees/
+!.env.example
+graphify-out/
