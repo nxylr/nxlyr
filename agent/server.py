@@ -17,6 +17,7 @@ from that reference are called out in comments where they occur.
 Run locally:  python server.py       (or: uvicorn server:app --host 0.0.0.0 --port 7860)
 """
 
+import asyncio
 import json
 import os
 import re
@@ -44,6 +45,15 @@ load_dotenv(override=True)
 # WebSocket handler. We want a missing dependency or a broken import to kill the
 # process at boot, not to surface as a dropped call on a live customer.
 from bot import run_bot
+from ws_auth import (
+    AdmissionCounter,
+    ReplayWebSocket,
+    StartMessageError,
+    admission_session,
+    format_call_sid,
+    issue_binding,
+    read_start_handshake,
+)
 
 
 E164_PHONE_NUMBER = re.compile(r"^\+[1-9]\d{1,14}$")
@@ -53,6 +63,8 @@ DEMO_GLOBAL_LIMIT = 50
 CONTACT_EMAIL_LIMIT = 3
 CONTACT_GLOBAL_LIMIT = 100
 DEMO_RATE_LIMIT_TTL_SECONDS = 24 * 60 * 60
+WS_CLOSE_POLICY_VIOLATION = 1008
+ws_admission_counter = AdmissionCounter()
 
 
 @asynccontextmanager
@@ -266,7 +278,9 @@ async def initiate_outbound_call(
     return await trigger_exotel_call(request, phone_number)
 
 
-async def get_demo_redis_client(request: Request) -> Any:
+async def get_demo_redis_client(
+    request: Request, *, ping_timeout_seconds: float | None = None
+) -> Any:
     """Return the shared Redis client used to enforce demo-call limits.
 
     This follows tools.make_redis_client's redis.asyncio/from_url/decode_responses
@@ -285,9 +299,12 @@ async def get_demo_redis_client(request: Request) -> Any:
 
     client = redis_asyncio.from_url(redis_url, decode_responses=True)
     try:
-        await client.ping()
+        if ping_timeout_seconds is None:
+            await client.ping()
+        else:
+            await asyncio.wait_for(client.ping(), timeout=ping_timeout_seconds)
     except Exception:
-        await client.aclose()
+        await asyncio.wait_for(client.aclose(), timeout=1.0)
         raise
 
     request.app.state.redis = client
@@ -482,12 +499,21 @@ async def request_demo_call(request: Request, body: DemoCallRequest) -> JSONResp
         return demo_exotel_failure_response(exotel_response)
 
     exotel_payload = json.loads(exotel_response.body)
+    call_sid = exotel_payload.get("call_sid")
+    if isinstance(call_sid, str) and call_sid:
+        try:
+            await issue_binding(await get_demo_redis_client(request), call_sid)
+        except Exception:
+            # The call has already been placed. In enforce mode its WebSocket is
+            # deliberately denied rather than allowing an unauthenticated session.
+            logger.exception("Unable to create WebSocket binding for demo call")
+
     return JSONResponse(
         status_code=200,
         content={
             "status": "success",
             "type": "call_triggered",
-            "call_sid": exotel_payload.get("call_sid"),
+            "call_sid": call_sid,
         },
     )
 
@@ -589,12 +615,74 @@ async def submit_contact(
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    """Handle one Exotel Media Streams connection."""
+    """Authenticate one Exotel stream before building its paid pipeline."""
     await websocket.accept()
-    logger.info("WebSocket accepted — handing off to bot")
+    mode = os.getenv("WS_AUTH_MODE", "log").lower()
+    if mode not in {"log", "enforce"}:
+        logger.warning("Invalid WS_AUTH_MODE; using log mode")
+        mode = "log"
+    try:
+        max_concurrent = int(os.getenv("MAX_CONCURRENT_WS", "10"))
+    except ValueError:
+        logger.warning("Invalid MAX_CONCURRENT_WS; using default")
+        max_concurrent = 10
+    max_concurrent = max(1, max_concurrent)
+
+    start_message: str | None = None
+    handshake_failed = False
+    replay_websocket: WebSocket | ReplayWebSocket = websocket
+    try:
+        handshake = await read_start_handshake(websocket)
+        start_message = handshake.start_message
+        replay_websocket = ReplayWebSocket(websocket, handshake.messages)
+    except Exception as error:
+        handshake_failed = True
+        reason = getattr(error, "reason", "start_message_unavailable")
+        messages = getattr(error, "messages", ())
+        replay_websocket = ReplayWebSocket(websocket, messages)
+        if mode == "enforce":
+            logger.warning("ws_auth rejected reason={} call_sid={}", reason, format_call_sid(None))
+            await websocket.close(code=WS_CLOSE_POLICY_VIOLATION)
+            return
+        logger.warning("ws_auth would_reject reason={} call_sid={}", reason, format_call_sid(None))
 
     try:
-        await run_bot(websocket)
+        try:
+            redis_client = await get_demo_redis_client(websocket, ping_timeout_seconds=1.0)
+        except TimeoutError:
+            logger.warning("ws_auth Redis ping timed out")
+            redis_client = None
+        except Exception:
+            redis_client = None
+
+        async with admission_session(
+            redis_client,
+            start_message,
+            counter=ws_admission_counter,
+            mode=mode,
+            max_concurrent=max_concurrent,
+        ) as decision:
+            if decision.reason is not None and mode == "log" and not handshake_failed:
+                logger.warning(
+                    "ws_auth would_reject reason={} call_sid={}",
+                    decision.reason,
+                    format_call_sid(decision.call_sid),
+                )
+            elif not decision.allowed:
+                logger.warning(
+                    "ws_auth rejected reason={} call_sid={}",
+                    decision.reason,
+                    format_call_sid(decision.call_sid),
+                )
+            elif decision.bound:
+                logger.info("ws_auth bound ok call_sid={}", format_call_sid(decision.call_sid))
+
+            if not decision.allowed:
+                await websocket.close(code=WS_CLOSE_POLICY_VIOLATION)
+                return
+
+            logger.info("WebSocket admitted — handing off to bot")
+            await run_bot(replay_websocket)
     except Exception:
         # logger.exception keeps the traceback; the reference prints the bare
         # exception, which loses where it came from.
