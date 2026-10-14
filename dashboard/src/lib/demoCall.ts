@@ -13,6 +13,7 @@ type DemoCallPayload = {
 };
 
 export const demoCallUrl = "https://api.infrasmith.dev/demo/call";
+export const consentTextVersion = "v1";
 
 export function normalizeIndianNumber(value: string) {
   const digits = value.replace(/\D/g, "");
@@ -29,7 +30,10 @@ export async function requestDemoCall(phone: string): Promise<DemoCallMessage> {
     const response = await fetch(demoCallUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({ phone_number: phone }),
+      body: JSON.stringify({
+        phone_number: phone,
+        consent_text_version: consentTextVersion,
+      }),
     });
 
     const payload: DemoCallPayload = await response.json().catch(() => ({}));
