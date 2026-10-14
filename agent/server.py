@@ -44,7 +44,21 @@ load_dotenv(override=True)
 # Imported at module scope, unlike the reference which imports bot inside the
 # WebSocket handler. We want a missing dependency or a broken import to kill the
 # process at boot, not to surface as a dropped call on a live customer.
-from bot import run_bot
+from bot import KB_PROJECT_SLUG, run_bot
+from demo_guard import (
+    CONSENT_TEXTS,
+    ConsentStorageError,
+    GuardUnavailable,
+    LimitExceeded,
+    kill_switch_on,
+    parse_client_ip,
+    read_config,
+    record_consent,
+    refund,
+    reserve,
+    resolve_tenant_id,
+    validate_phone,
+)
 from ws_auth import (
     AdmissionCounter,
     ReplayWebSocket,
@@ -56,10 +70,7 @@ from ws_auth import (
 )
 
 
-E164_PHONE_NUMBER = re.compile(r"^\+[1-9]\d{1,14}$")
 CONTACT_EMAIL = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
-DEMO_PHONE_LIMIT = 5
-DEMO_GLOBAL_LIMIT = 50
 CONTACT_EMAIL_LIMIT = 3
 CONTACT_GLOBAL_LIMIT = 100
 DEMO_RATE_LIMIT_TTL_SECONDS = 24 * 60 * 60
@@ -124,6 +135,7 @@ class DemoCallRequest(BaseModel):
     # supplied as (for example) null or a JSON number, rather than FastAPI
     # rejecting the request before the endpoint can explain the problem.
     phone_number: Any = Field(default=None)
+    consent_text_version: Any = Field(default=None)
 
 
 class ContactRequest(BaseModel):
@@ -312,32 +324,6 @@ async def get_demo_redis_client(
     return client
 
 
-async def check_demo_rate_limits(request: Request, phone_number: str) -> str | None:
-    """Reserve a demo-call slot, returning the exceeded limit when blocked.
-
-    Redis INCR is atomic, so concurrent requests cannot both take the last slot.
-    EXPIRE is applied when each key is first created: phone keys have a rolling
-    24-hour window and dated global keys are automatically cleaned up.
-    """
-    redis_client = await get_demo_redis_client(request)
-    phone_key = f"demo:rate:phone:{phone_number}"
-    global_key = f"demo:rate:global:{datetime.now(timezone.utc).date().isoformat()}"
-
-    phone_count = await redis_client.incr(phone_key)
-    if phone_count == 1:
-        await redis_client.expire(phone_key, DEMO_RATE_LIMIT_TTL_SECONDS)
-    if phone_count > DEMO_PHONE_LIMIT:
-        return "phone"
-
-    global_count = await redis_client.incr(global_key)
-    if global_count == 1:
-        await redis_client.expire(global_key, DEMO_RATE_LIMIT_TTL_SECONDS)
-    if global_count > DEMO_GLOBAL_LIMIT:
-        return "global"
-
-    return None
-
-
 async def check_contact_rate_limits(request: Request, email: str) -> str | None:
     """Reserve a contact-form slot using the shared Redis client.
 
@@ -451,23 +437,16 @@ def demo_exotel_failure_response(exotel_response: JSONResponse) -> JSONResponse:
 
 @app.post("/demo/call")
 async def request_demo_call(request: Request, body: DemoCallRequest) -> JSONResponse:
-    """Validate and rate-limit a landing-page demo request before calling Exotel."""
-    phone_number = body.phone_number
-    if not isinstance(phone_number, str) or not E164_PHONE_NUMBER.fullmatch(phone_number):
-        return JSONResponse(
-            status_code=400,
-            content={
-                "status": "error",
-                "type": "invalid_phone_number",
-                "error": "invalid_phone_number",
-                "detail": "phone_number must be an E.164 number, for example +919876543210.",
-            },
-        )
-
+    """Guard, record consent for, and then place a public demo call."""
     try:
-        limited_by = await check_demo_rate_limits(request, phone_number)
-    except Exception:
-        logger.exception("Unable to enforce /demo/call rate limits")
+        redis_client = await get_demo_redis_client(request, ping_timeout_seconds=2.0)
+        if await kill_switch_on(redis_client):
+            return JSONResponse(
+                status_code=503,
+                content={"status": "error", "type": "demo_disabled", "error": "demo_disabled"},
+            )
+    except Exception as error:
+        logger.error("demo guard unavailable: {}", type(error).__name__)
         return JSONResponse(
             status_code=500,
             content={
@@ -478,24 +457,106 @@ async def request_demo_call(request: Request, body: DemoCallRequest) -> JSONResp
             },
         )
 
-    if limited_by:
+    phone_number = body.phone_number
+    if not validate_phone(phone_number):
+        return JSONResponse(
+            status_code=400,
+            content={
+                "status": "error",
+                "type": "invalid_phone_number",
+                "error": "invalid_phone_number",
+                "detail": "phone_number must be an Indian mobile number, for example +919876543210.",
+            },
+        )
+
+    consent_version = (
+        "v1"
+        if body.consent_text_version is None
+        and "consent_text_version" not in body.model_fields_set
+        else body.consent_text_version
+    )
+    if not isinstance(consent_version, str) or consent_version not in CONSENT_TEXTS:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "status": "error",
+                "type": "consent_version_unknown",
+                "error": "consent_version_unknown",
+            },
+        )
+
+    client_ip = parse_client_ip(request.headers.get("x-real-ip"))
+    if client_ip.address is None:
+        logger.warning("Demo-call request has missing or invalid X-Real-IP; using unknown bucket")
+
+    try:
+        config = await read_config(redis_client)
+        reservation = await reserve(redis_client, phone_number, client_ip.bucket, config)
+    except GuardUnavailable as error:
+        logger.error("demo guard unavailable: {}", type(error).__name__)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "type": "rate_limit_unavailable",
+                "error": "rate_limit_unavailable",
+                "detail": "Demo calls are temporarily unavailable. Please try again later.",
+            },
+        )
+
+    except LimitExceeded as limited:
+        response_headers = {}
+        if limited.retry_after is not None:
+            response_headers["Retry-After"] = str(limited.retry_after)
         return JSONResponse(
             status_code=429,
+            headers=response_headers,
             content={
                 "status": "error",
                 "type": "rate_limited",
                 "error": "rate_limit_exceeded",
-                "limit": limited_by,
+                "limit": limited.limit,
                 "detail": (
-                    "This number has reached its demo-call limit."
-                    if limited_by == "phone"
-                    else "The daily demo-call limit has been reached."
+                    "Please wait before requesting another demo call."
+                    if limited.limit == "cooldown"
+                    else "This demo-call limit has been reached."
                 ),
+            },
+        )
+
+    try:
+        tenant_id = await resolve_tenant_id(
+            request.app.state, request.app.state.session, KB_PROJECT_SLUG
+        )
+        await record_consent(
+            request.app.state.session,
+            tenant_id=tenant_id,
+            phone_number=phone_number,
+            consent_version=consent_version,
+            headers=request.headers,
+            ip_address=client_ip.address,
+        )
+    except ConsentStorageError as error:
+        logger.error("demo consent storage failed: {}", type(error).__name__)
+        try:
+            await refund(redis_client, reservation)
+        except Exception as refund_error:
+            logger.error("demo counter refund failed: {}", type(refund_error).__name__)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "type": "consent_storage_failed",
+                "error": "consent_storage_failed",
             },
         )
 
     exotel_response = await trigger_exotel_call(request, phone_number)
     if exotel_response.status_code != 200:
+        try:
+            await refund(redis_client, reservation)
+        except Exception as refund_error:
+            logger.error("demo counter refund failed: {}", type(refund_error).__name__)
         return demo_exotel_failure_response(exotel_response)
 
     exotel_payload = json.loads(exotel_response.body)

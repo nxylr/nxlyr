@@ -56,6 +56,7 @@ keycheck/
 prompt_harness.py
 prompt_harness_transcripts/
 test_kb_loader.py
+test_demo_guard.py
 test_ws_auth.py
 mock_exotel_client.py
 

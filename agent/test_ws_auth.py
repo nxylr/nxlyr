@@ -158,18 +158,28 @@ class WsAuthTests(unittest.IsolatedAsyncioTestCase):
     async def test_request_demo_call_issues_a_binding(self) -> None:
         server = import_server_without_dotenv()
         redis = FakeRedis()
-        request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(redis=redis)))
+        request = SimpleNamespace(
+            app=SimpleNamespace(state=SimpleNamespace(redis=redis, session=object())),
+            headers={},
+        )
         exotel_response = server.JSONResponse(
             status_code=200,
             content={"status": "success", "call_sid": "call-1"},
         )
 
         with (
-            patch.object(server, "check_demo_rate_limits", new=AsyncMock(return_value=None)),
+            patch.object(server, "kill_switch_on", new=AsyncMock(return_value=False)),
+            patch.object(server, "read_config", new=AsyncMock(return_value=object())),
+            patch.object(server, "reserve", new=AsyncMock(return_value=object())),
+            patch.object(server, "resolve_tenant_id", new=AsyncMock(return_value="tenant-1")),
+            patch.object(server, "record_consent", new=AsyncMock()),
             patch.object(server, "trigger_exotel_call", new=AsyncMock(return_value=exotel_response)),
         ):
             response = await server.request_demo_call(
-                request, server.DemoCallRequest(phone_number="+919876543210")
+                request,
+                server.DemoCallRequest(
+                    phone_number="+919876543210", consent_text_version="v1"
+                ),
             )
 
         self.assertEqual(response.status_code, 200)
