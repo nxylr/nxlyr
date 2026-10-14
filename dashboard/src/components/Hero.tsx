@@ -282,6 +282,9 @@ export function Hero() {
             </div>
           </div>
 
+          {/* This wording is recorded verbatim as version v1; changing a single character
+              requires a new version (v2) in CONSENT_TEXTS, the page, and demoCall.ts;
+              never edit v1 in place. */}
           <p
             id="consent"
             className="mt-5 max-w-sm text-center text-sm leading-6 text-muted-foreground"
