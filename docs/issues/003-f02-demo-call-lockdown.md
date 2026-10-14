@@ -4,7 +4,7 @@ title: "003: Lock down /demo/call (audit F02)"
 labels: task, audit
 ---
 
-Status: APPROVED r3 (human, 2026-10-14). `projects.tenant_id` confirmed by the human. Not yet committed. Build is run by the human with Codex from this worktree.
+Status: APPROVED r3 (human, 2026-10-14). `projects.tenant_id` confirmed by the human. Build is run by the human with Codex from this worktree.
 Depends on: none (F01 merged as 7cf8edf). Edits the same function as 004 (log hygiene, `server.py`) and future 006 (call record, `request_demo_call`).
 
 ## Goal
