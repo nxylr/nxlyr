@@ -46,7 +46,6 @@ Requires environment variables (see .env.template):
 import json
 import math
 import os
-import sys
 from dataclasses import dataclass
 from datetime import date
 from typing import Callable, Mapping
@@ -96,13 +95,14 @@ from pipecat.turns.user_stop import (
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.workers.runner import WorkerRunner
 
+from log_scrub import configure_logging
 from tools import TOOL_SCHEMAS, CallResources, make_redis_client
 
 # Bare logger.remove() rather than test_pipeline.py's logger.remove(0): this module
 # is imported by a long-lived server, and remove(0) raises if the default handler
 # is already gone.
 logger.remove()
-logger.add(sys.stderr, level=os.getenv("LOG_LEVEL", "DEBUG"))
+configure_logging(os.getenv("LOG_LEVEL"))
 
 REQUIRED_ENV_VARS = ["DEEPGRAM_API_KEY", "OPENAI_API_KEY", "ELEVENLABS_API_KEY"]
 

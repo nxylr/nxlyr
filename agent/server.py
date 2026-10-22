@@ -240,9 +240,7 @@ async def trigger_exotel_call(request: Request, phone_number: str) -> JSONRespon
                     },
                 )
             else:
-                logger.warning(
-                    f"Exotel Connect API returned status {resp.status}: {resp_text}"
-                )
+                logger.warning(f"Exotel Connect API returned status {resp.status}")
                 return JSONResponse(
                     status_code=resp.status,
                     content={

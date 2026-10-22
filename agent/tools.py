@@ -504,11 +504,11 @@ async def make_redis_client() -> Any | None:
 
         client = redis_asyncio.from_url(redis_url, decode_responses=True)
         await client.ping()
-        logger.info(f"Redis connected ({redis_url})")
+        logger.info("Redis connected")
         return client
     except Exception as e:
         logger.error(
-            f"Could not connect to Redis at {redis_url}: {e} — session flags "
+            f"Could not connect to Redis: {e} — session flags "
             "will not be written for this call"
         )
         return None
