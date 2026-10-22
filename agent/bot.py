@@ -44,9 +44,12 @@ Requires environment variables (see .env.template):
 """
 
 import json
+import math
 import os
 import sys
+from dataclasses import dataclass
 from datetime import date
+from typing import Callable, Mapping
 
 import aiohttp
 from loguru import logger
@@ -57,6 +60,8 @@ load_dotenv(override=True)
 from fastapi import WebSocket
 
 from pipecat.audio.vad.silero import SileroVADAnalyzer
+from pipecat.audio.turn.smart_turn.base_smart_turn import SmartTurnParams
+from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
 from pipecat.frames.frames import TTSSpeakFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
@@ -84,6 +89,10 @@ from pipecat.turns.user_start import (
     TranscriptionUserTurnStartStrategy,
     VADUserTurnStartStrategy,
 )
+from pipecat.turns.user_stop import (
+    SpeechTimeoutUserTurnStopStrategy,
+    TurnAnalyzerUserTurnStopStrategy,
+)
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.workers.runner import WorkerRunner
 
@@ -96,6 +105,150 @@ logger.remove()
 logger.add(sys.stderr, level=os.getenv("LOG_LEVEL", "DEBUG"))
 
 REQUIRED_ENV_VARS = ["DEEPGRAM_API_KEY", "OPENAI_API_KEY", "ELEVENLABS_API_KEY"]
+
+TURN_MODE_ENV_VAR = "NXLYR_TURN_MODE"
+TURN_BACKSTOP_ENV_VAR = "NXLYR_TURN_BACKSTOP_SECS"
+SMART_BACKSTOP_MODE = "smart_backstop"
+SPEECH_TIMEOUT_MODE = "speech_timeout"
+DEFAULT_TURN_BACKSTOP_SECS = 0.8
+SPEECH_TIMEOUT_SECS = 0.6
+SMART_TURN_GUARD_SECS = 0.2
+MIN_TURN_BACKSTOP_SECS = 0.3
+MAX_TURN_BACKSTOP_SECS = 2.0
+
+
+class TurnReleaseConfigurationError(RuntimeError):
+    """Raised at process startup when the turn-release environment is invalid."""
+
+
+@dataclass(frozen=True)
+class TurnReleaseConfig:
+    mode: str
+    backstop_secs: float
+
+
+def load_turn_release_config(
+    environment: Mapping[str, str] | None = None,
+) -> TurnReleaseConfig:
+    """Parse the immutable process-start turn-release configuration."""
+    environment = environment if environment is not None else os.environ
+    raw_mode = environment.get(TURN_MODE_ENV_VAR)
+    mode = raw_mode or SMART_BACKSTOP_MODE
+    if mode not in (SMART_BACKSTOP_MODE, SPEECH_TIMEOUT_MODE):
+        raise TurnReleaseConfigurationError(
+            f"{TURN_MODE_ENV_VAR}={raw_mode!r} must be one of "
+            f"{SMART_BACKSTOP_MODE!r}, {SPEECH_TIMEOUT_MODE!r}"
+        )
+
+    raw_backstop = environment.get(TURN_BACKSTOP_ENV_VAR) or None
+    if raw_backstop is None:
+        backstop_secs = DEFAULT_TURN_BACKSTOP_SECS
+    else:
+        try:
+            backstop_secs = float(raw_backstop)
+        except ValueError as error:
+            raise TurnReleaseConfigurationError(
+                f"{TURN_BACKSTOP_ENV_VAR}={raw_backstop!r} must be a finite decimal "
+                f"in the inclusive range {MIN_TURN_BACKSTOP_SECS} through "
+                f"{MAX_TURN_BACKSTOP_SECS}"
+            ) from error
+
+    if not math.isfinite(backstop_secs) or not (
+        MIN_TURN_BACKSTOP_SECS <= backstop_secs <= MAX_TURN_BACKSTOP_SECS
+    ):
+        raise TurnReleaseConfigurationError(
+            f"{TURN_BACKSTOP_ENV_VAR}={raw_backstop!r} must be a finite decimal "
+            f"in the inclusive range {MIN_TURN_BACKSTOP_SECS} through "
+            f"{MAX_TURN_BACKSTOP_SECS}"
+        )
+
+    return TurnReleaseConfig(mode=mode, backstop_secs=backstop_secs)
+
+
+# Read once during module/process initialization so a malformed image fails its
+# import smoke and health check before a WebSocket can reach run_bot().
+TURN_RELEASE_CONFIG = load_turn_release_config()
+logger.info(
+    f"turn release configured: mode={TURN_RELEASE_CONFIG.mode} "
+    f"backstop_secs={TURN_RELEASE_CONFIG.backstop_secs}"
+)
+
+
+def build_user_turn_strategies(
+    config: TurnReleaseConfig = TURN_RELEASE_CONFIG,
+    *,
+    turn_analyzer_factory: Callable[[SmartTurnParams], object] | None = None,
+    smart_turn_guard_secs: float = SMART_TURN_GUARD_SECS,
+) -> UserTurnStrategies:
+    """Build the explicit start/stop strategy lists for one immutable config."""
+    # PipelineParams has no allow_interruptions field in Pipecat 1.5.0;
+    # interruption is controlled by these user-turn start strategies.
+    #
+    # enable_interruptions=True makes the aggregator broadcast an
+    # InterruptionFrame when a turn starts. That frame is a
+    # SystemFrame, so it bypasses processor queues and actually
+    # preempts work in flight rather than queueing behind it:
+    #   - every processor resets its process task, flushing frames
+    #     already queued (frame_processor._start_interruption)
+    #   - TTSService clears its aggregator, frame sequencer and
+    #     pending LLMFullResponseEnd frames
+    #   - the output transport drains queued audio, so buffered
+    #     speech is dropped instead of played out
+    #   - the assistant aggregator calls reset() *without*
+    #     push_aggregation(), so the interrupted reply is discarded
+    #     rather than committed to the context
+    # Both strategies are enabled: VAD is the fast path, and
+    # transcription is the fallback for a caller too quiet to trip
+    # VAD but still transcribed by Deepgram.
+    start = [
+        VADUserTurnStartStrategy(enable_interruptions=True),
+        TranscriptionUserTurnStartStrategy(enable_interruptions=True),
+    ]
+
+    if config.mode == SPEECH_TIMEOUT_MODE:
+        return UserTurnStrategies(
+            start=start,
+            stop=[
+                SpeechTimeoutUserTurnStopStrategy(
+                    user_speech_timeout=SPEECH_TIMEOUT_SECS,
+                    wait_for_transcript=True,
+                )
+            ],
+        )
+
+    smart_turn_stop_secs = config.backstop_secs + smart_turn_guard_secs
+    if smart_turn_stop_secs < config.backstop_secs + SMART_TURN_GUARD_SECS:
+        raise TurnReleaseConfigurationError(
+            "smart_turn_stop_secs must be at least 0.2 seconds greater than "
+            f"{TURN_BACKSTOP_ENV_VAR}"
+        )
+
+    make_analyzer = turn_analyzer_factory or (
+        lambda params: LocalSmartTurnAnalyzerV3(params=params)
+    )
+    return UserTurnStrategies(
+        start=start,
+        stop=[
+            TurnAnalyzerUserTurnStopStrategy(
+                turn_analyzer=make_analyzer(SmartTurnParams(stop_secs=smart_turn_stop_secs)),
+                wait_for_transcript=True,
+            ),
+            SpeechTimeoutUserTurnStopStrategy(
+                user_speech_timeout=config.backstop_secs,
+                wait_for_transcript=True,
+            ),
+        ],
+    )
+
+
+def _build_user_aggregator_params(
+    user_turn_strategies: UserTurnStrategies | None = None,
+) -> LLMUserAggregatorParams:
+    """Keep the production VAD and turn-strategy wiring directly testable."""
+    return LLMUserAggregatorParams(
+        vad_analyzer=SileroVADAnalyzer(),
+        user_turn_strategies=user_turn_strategies or build_user_turn_strategies(),
+    )
 
 # Exotel streams 8 kHz 16-bit signed little-endian mono PCM ("raw/slin"),
 # base64-encoded per media event — no mu-law/G.711 companding anywhere, unlike
@@ -346,6 +499,10 @@ async def run_bot(websocket: WebSocket) -> None:
     call ends; the caller is responsible for closing the socket.
     """
     check_env()
+    logger.info(
+        f"turn release call start: mode={TURN_RELEASE_CONFIG.mode} "
+        f"backstop_secs={TURN_RELEASE_CONFIG.backstop_secs}"
+    )
 
     # Consume Exotel's handshake (`connected` + `start`) to get the identifiers the
     # serializer needs. This is cached on the websocket by Pipecat, so it's safe
@@ -466,34 +623,7 @@ async def run_bot(websocket: WebSocket) -> None:
         )
         context_aggregator = LLMContextAggregatorPair(
             context,
-            user_params=LLMUserAggregatorParams(
-                vad_analyzer=SileroVADAnalyzer(),
-                # PipelineParams has no allow_interruptions field in Pipecat 1.5.0;
-                # interruption is controlled by these user-turn start strategies.
-                #
-                # enable_interruptions=True makes the aggregator broadcast an
-                # InterruptionFrame when a turn starts. That frame is a
-                # SystemFrame, so it bypasses processor queues and actually
-                # preempts work in flight rather than queueing behind it:
-                #   - every processor resets its process task, flushing frames
-                #     already queued (frame_processor._start_interruption)
-                #   - TTSService clears its aggregator, frame sequencer and
-                #     pending LLMFullResponseEnd frames
-                #   - the output transport drains queued audio, so buffered
-                #     speech is dropped instead of played out
-                #   - the assistant aggregator calls reset() *without*
-                #     push_aggregation(), so the interrupted reply is discarded
-                #     rather than committed to the context
-                # Both strategies are enabled: VAD is the fast path, and
-                # transcription is the fallback for a caller too quiet to trip
-                # VAD but still transcribed by Deepgram.
-                user_turn_strategies=UserTurnStrategies(
-                    start=[
-                        VADUserTurnStartStrategy(enable_interruptions=True),
-                        TranscriptionUserTurnStartStrategy(enable_interruptions=True),
-                    ]
-                ),
-            ),
+            user_params=_build_user_aggregator_params(),
         )
 
         pipeline = Pipeline(
