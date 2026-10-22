@@ -76,9 +76,9 @@ COPY *.py ./
 # imports it lazily, inside run_bot() and only when NXLYR_LATENCY_CSV is set,
 # so no import of server would ever reach it.
 #
-# Runs without credentials on purpose: nothing here reads env vars at import
-# time (bot.check_env() is called inside run_bot), so this stays a pure
-# module-resolution check and needs no build secrets.
+# Runs without credentials on purpose: bot reads only non-secret turn-release
+# controls at import time and defaults them when absent. Required credentials
+# are still checked inside run_bot(), so this remains a module-resolution check.
 RUN python -c "import server, week2_latency_observer"
 
 # Drop root. Nothing here writes to the filesystem in normal operation; if the
