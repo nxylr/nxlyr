@@ -56,24 +56,25 @@ from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.frames.frames import FunctionCallResultProperties, TTSSpeakFrame
 from pipecat.services.llm_service import FunctionCallParams
 
+from prompt import CLOSING_PHRASE
+
+# The closing line end_call speaks. Fixed rather than model-authored, for the
+# same reason prompt.build_greeting is fixed: it removes an LLM round trip from
+# a moment where latency is conspicuous, and it removes the model's last
+# opportunity to improvise an unbacked promise on the way out the door.
+#
+# Deliberately promises nothing and mentions no timeframe. The first draft of
+# this line was "...and someone will be in touch shortly", which is the exact
+# over-promise the [CORE RULES] block now forbids the model from making about
+# transfers — and worse coming from here, because a hardcoded string says it on
+# every single call regardless of outcome. It also has to be true after
+# `not_interested` and `wrong_number`, where nobody is following up at all.
+
 # Matches EXPIRE session:call:{call_id} 14400 in 03_SOFTWARE_FLOW.md:87. Set
 # here because nothing else currently creates the session hash (see
 # CallResources.session_key), so if this module doesn't expire the key, nothing
 # will and it leaks for the lifetime of the Redis volume.
 SESSION_TTL_SECONDS = 14400
-
-# The closing line end_call speaks. Fixed rather than model-authored, for the
-# same reason bot.GREETING is fixed: it removes an LLM round trip from a moment
-# where latency is conspicuous, and it removes the model's last opportunity to
-# improvise an unbacked promise on the way out the door.
-#
-# Deliberately promises nothing and mentions no timeframe. The first draft of
-# this line was "...and someone will be in touch shortly", which is the exact
-# over-promise the [TOOLS] block now forbids the model from making about
-# transfers — and worse coming from here, because a hardcoded string says it on
-# every single call regardless of outcome. It also has to be true after
-# `not_interested` and `wrong_number`, where nobody is following up at all.
-CLOSING_PHRASE = "Thanks for your time — that's everything I needed. Have a good day."
 
 
 @dataclass
@@ -254,6 +255,10 @@ async def book_site_visit(params: FunctionCallParams) -> None:
             "status": "booked",
             "preferred_date": preferred_date,
             "preferred_time": preferred_time,
+            "next_step": (
+                "Visit recorded. Confirm the day and time in one sentence. The call is "
+                "not over: do not hang up; let the caller lead."
+            ),
         }
     )
 
@@ -261,8 +266,8 @@ async def book_site_visit(params: FunctionCallParams) -> None:
 BOOK_SITE_VISIT_SCHEMA = FunctionSchema(
     name="book_site_visit",
     description=(
-        "Call this when the lead has explicitly agreed to a site visit and "
-        "provided a date or time preference."
+        "Call this when the lead has explicitly agreed to a site visit and given a "
+        "day or time. Booking a visit does not end the call: keep talking."
     ),
     properties={
         "preferred_date": {"type": "string", "description": "YYYY-MM-DD"},
@@ -311,7 +316,7 @@ async def transfer_to_human(params: FunctionCallParams) -> None:
     # rather than leaving the model to infer it. On the first Task 4.1 harness
     # run it read the honest `bridge_connected: false` and still told the
     # caller "they'll be reaching out to you shortly" — nobody was going to.
-    # The [TOOLS] prompt block is the primary fix; this puts the same
+    # The [CORE RULES] prompt block is the primary fix; this puts the same
     # correction directly in the model's context at the moment it composes the
     # handoff sentence.
     await params.result_callback(
@@ -383,8 +388,8 @@ async def end_call(params: FunctionCallParams) -> None:
     The alternative — model-authored goodbye, shutdown hung off
     on_bot_stopped_speaking — buys slightly more natural wording at the cost of
     an extra turn of latency and one more chance for the model to improvise a
-    promise. bot.GREETING already set the precedent for fixing the words at the
-    edges of the call.
+    promise. prompt.build_greeting already set the precedent for fixing the
+    words at the edges of the call.
     """
     resources = _resources(params)
     outcome = params.arguments.get("outcome")
@@ -442,11 +447,21 @@ async def end_call(params: FunctionCallParams) -> None:
 END_CALL_SCHEMA = FunctionSchema(
     name="end_call",
     description=(
-        "Call this to gracefully close the conversation after achieving a "
-        "clear outcome."
+        "Hang up on the caller. Call this only when the caller's latest message says "
+        "goodbye, says they are finished, asks to end the call, or says it is a wrong "
+        "number. Never in the same turn as another function, and never in the turn "
+        "after a function result unless the caller's latest message already said "
+        "goodbye. A booking, a passed-on question or a finished answer is not a reason."
     ),
     properties={
-        "outcome": {"type": "string", "enum": END_CALL_OUTCOMES},
+        "outcome": {
+            "type": "string",
+            "enum": END_CALL_OUTCOMES,
+            "description": (
+                "How the call went so far. site_visit_booked only if a visit was "
+                "booked earlier on this call. It is not a reason to hang up."
+            ),
+        },
         "summary": {"type": "string"},
     },
     required=["outcome"],

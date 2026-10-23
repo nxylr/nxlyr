@@ -1,7 +1,7 @@
 """
 NXLYR — text-only prompt testing harness (Task 2.3, extended in Task 4.1)
 
-Same system prompt (bot.build_system_prompt), same OpenAI model/settings as
+Same system prompt (prompt.build_initial_messages), same OpenAI model/settings as
 production (bot.LLM_MODEL / LLM_MAX_TOKENS / LLM_TEMPERATURE), and — since Task
 4.1 — the same three tools with the same handlers (agent/tools.py). Plain text
 in, text out. No Exotel, no audio, no Deepgram or ElevenLabs calls; only
@@ -41,13 +41,12 @@ load_dotenv(override=True)
 from openai import AsyncOpenAI
 
 from bot import (
-    GREETING,
     LLM_MAX_TOKENS,
     LLM_MODEL,
     LLM_TEMPERATURE,
-    build_system_prompt,
     load_project_kb,
 )
+from prompt import build_initial_messages
 from tools import (
     CLOSING_PHRASE,
     TOOL_HANDLERS,
@@ -200,7 +199,6 @@ async def main() -> None:
 
     client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
     project_kb = load_project_kb()
-    system_prompt = build_system_prompt(project_kb=project_kb)
 
     # Real handlers write real session flags. With REDIS_URL unset this is None
     # and the handlers log a warning and carry on, exactly as they do on a call
@@ -221,11 +219,9 @@ async def main() -> None:
     # Seeds the same first assistant turn production starts every call with
     # (bot.py's on_client_connected), so the buyer's opening line here is a
     # reply to the same greeting they'd hear on a real call, not a cold open.
-    history = [
-        {"role": "system", "content": system_prompt},
-        {"role": "assistant", "content": GREETING},
-    ]
-    print(f"Bot: {GREETING}\n")
+    history = build_initial_messages(project_kb)
+    greeting = history[-1]["content"]
+    print(f"Bot: {greeting}\n")
 
     interactive = sys.stdin.isatty()
 
