@@ -10,3 +10,5 @@
 - **Ship gates in log mode first.** A new auth/limit check ships with `log` as the code default (never rejects, logs `would_reject`), is proven with a real call, then flipped to `enforce` by the human in the VPS `.env`. (F01: `WS_AUTH_MODE`.)
 - **Local end-to-end before the VPS:** Redis in Docker on a spare port + `agent/mock_exotel_client.py` + dummy API keys, server run from the worktree. Proves admit/refuse paths without paid calls.
 - **Review the replay path, not just the gate.** When a handler consumes frames to decide, check every failure path puts them back (binary frame, early disconnect, timeout).
+- **PRs that touch the same file merge one at a time.** The second takes `origin/main`, resolves, and reruns every test module before it merges (004 and 011 both edited the import block in `bot.py`; all five modules passed after the merge).
+- **Set T0 once, right before the calls.** Every count (leaks, stalls, latency) is "since T0"; a T0 set earlier pulls in other calls. Use the events log for latency, not the CSV.

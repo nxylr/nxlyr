@@ -11,3 +11,4 @@
 | 2026-10 | zsh treats `#` in interactive commands as an argument. | Don't put inline comments in pasted shell commands. |
 | 2026-10-13 | `new-task.sh` created task branches tracking `origin/main`, so a bare `git push` would target `main`. | `git worktree add --no-track`; always push with `git push -u origin task/<slug>`. |
 | 2026-10-13 | `grep` with an unmatched shell glob (`--include=*.ts`) aborted the whole zsh command. | Quote globs or pass directories, not unexpanded patterns, in grep commands. |
+| 2026-10-22 | The latency CSV `turn` column is a running counter across the call, not a per-call turn number, so per-turn reads from it were misleading. | Use the events log (`section6_real_call_events.log`) for per-turn latency. |
