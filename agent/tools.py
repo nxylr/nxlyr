@@ -44,7 +44,9 @@ globals, which would be wrong the moment two calls run concurrently in the same
 worker process.
 """
 
+import asyncio
 import os
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import date
 from typing import Any
@@ -514,16 +516,25 @@ async def make_redis_client() -> Any | None:
         )
         return None
 
+    client = None
     try:
         import redis.asyncio as redis_asyncio
 
-        client = redis_asyncio.from_url(redis_url, decode_responses=True)
-        await client.ping()
+        client = redis_asyncio.from_url(
+            redis_url,
+            decode_responses=True,
+            socket_connect_timeout=1.0,
+            socket_timeout=2.0,
+        )
+        await asyncio.wait_for(client.ping(), timeout=1.0)
         logger.info("Redis connected")
         return client
-    except Exception as e:
+    except Exception as error:
+        if client is not None:
+            with suppress(Exception):
+                await asyncio.wait_for(client.aclose(), timeout=1.0)
         logger.error(
-            f"Could not connect to Redis: {e} — session flags "
+            f"Could not connect to Redis: {error} — session flags "
             "will not be written for this call"
         )
         return None

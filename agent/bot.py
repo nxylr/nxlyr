@@ -43,9 +43,11 @@ Requires environment variables (see .env.template):
                          itself still runs.)
 """
 
+import asyncio
 import math
 import os
 from dataclasses import dataclass
+from time import monotonic
 from typing import Callable, Mapping
 
 import aiohttp
@@ -59,7 +61,12 @@ from fastapi import WebSocket
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.turn.smart_turn.base_smart_turn import SmartTurnParams
 from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
-from pipecat.frames.frames import TTSSpeakFrame
+from pipecat.frames.frames import (
+    BotStartedSpeakingFrame,
+    TTSSpeakFrame,
+    VADUserStartedSpeakingFrame,
+)
+from pipecat.observers.base_observer import BaseObserver, FramePushed
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
 from pipecat.processors.aggregators.llm_context import LLMContext
@@ -92,6 +99,7 @@ from pipecat.turns.user_stop import (
 )
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.workers.runner import WorkerRunner
+from pipecat.processors.frame_processor import FrameDirection
 
 from log_scrub import configure_logging
 from prompt import (
@@ -296,12 +304,70 @@ def load_project_kb() -> dict:
     return load_kb(KB_PROJECT_SLUG)
 
 
-async def run_bot(websocket: WebSocket) -> None:
+def _call_timing(
+    event: str,
+    *,
+    ws_connected_at: float | None,
+    conn_id: str | None,
+    **fields: int | str,
+) -> None:
+    if ws_connected_at is None or conn_id is None:
+        return
+    elapsed_ms = max(0, int((monotonic() - ws_connected_at) * 1000))
+    extras = "".join(f" {key}={value}" for key, value in fields.items())
+    logger.info(f"call timing: {event} conn={conn_id} t_ms={elapsed_ms}{extras}")
+
+
+class CallTimingObserver(BaseObserver):
+    """Log the first caller speech and first bot audio once per call."""
+
+    def __init__(self, *, ws_connected_at: float, conn_id: str) -> None:
+        super().__init__()
+        self._ws_connected_at = ws_connected_at
+        self._conn_id = conn_id
+        self._caller_spoke = False
+        self._greeting_audio_sent = False
+        self._seen_frames: set[int] = set()
+
+    async def on_push_frame(self, data: FramePushed) -> None:
+        if data.direction != FrameDirection.DOWNSTREAM:
+            return
+        frame = data.frame
+        if not isinstance(frame, (VADUserStartedSpeakingFrame, BotStartedSpeakingFrame)):
+            return
+        if frame.id in self._seen_frames:
+            return
+        self._seen_frames.add(frame.id)
+
+        if isinstance(frame, VADUserStartedSpeakingFrame):
+            if not self._caller_spoke and not self._greeting_audio_sent:
+                self._caller_spoke = True
+                _call_timing(
+                    "caller_spoke_before_greeting_audio",
+                    ws_connected_at=self._ws_connected_at,
+                    conn_id=self._conn_id,
+                )
+        elif not self._greeting_audio_sent:
+            self._greeting_audio_sent = True
+            _call_timing(
+                "first_bot_audio_sent",
+                ws_connected_at=self._ws_connected_at,
+                conn_id=self._conn_id,
+            )
+
+
+async def run_bot(
+    websocket: WebSocket,
+    *,
+    ws_connected_at: float | None = None,
+    conn_id: str | None = None,
+) -> None:
     """Run one call's pipeline to completion over an accepted Exotel WebSocket.
 
     server.py's /ws route accepts the socket and hands it here. Returns when the
     call ends; the caller is responsible for closing the socket.
     """
+    run_bot_started_at = monotonic()
     check_env()
     logger.info(
         f"turn release call start: mode={TURN_RELEASE_CONFIG.mode} "
@@ -333,14 +399,19 @@ async def run_bot(websocket: WebSocket) -> None:
     # logs the full traceback and closes the websocket gracefully (including
     # the case where Exotel has already hung up), so that's left to do the
     # actual close rather than duplicating it here.
+    from kb_loader import kb_cache_source
+
+    kb_source = kb_cache_source(KB_PROJECT_SLUG)
+    kb_started_at = monotonic()
     try:
-        project_kb = load_project_kb()
+        project_kb = await asyncio.to_thread(load_project_kb)
     except Exception as e:
         logger.error(
             f"Project KB failed to load for slug={KB_PROJECT_SLUG!r} "
             f"(call_sid={call_sid}) — aborting call: {e}"
         )
         raise
+    kb_ms = max(0, int((monotonic() - kb_started_at) * 1000))
 
     serializer = ExotelFrameSerializer(
         stream_sid=stream_sid,
@@ -426,9 +497,18 @@ async def run_bot(websocket: WebSocket) -> None:
             f"disclosure_mode={AI_DISCLOSURE_MODE} company={COMPANY_DISPLAY}"
         )
         context = LLMContext(messages=messages, tools=TOOL_SCHEMAS)
+        models_started_at = monotonic()
+        user_params = await asyncio.to_thread(_build_user_aggregator_params)
+        models_ms = max(0, int((monotonic() - models_started_at) * 1000))
+        _call_timing(
+            "models_built",
+            ws_connected_at=ws_connected_at,
+            conn_id=conn_id,
+            models_ms=models_ms,
+        )
         context_aggregator = LLMContextAggregatorPair(
             context,
-            user_params=_build_user_aggregator_params(),
+            user_params=user_params,
         )
 
         pipeline = Pipeline(
@@ -447,6 +527,13 @@ async def run_bot(websocket: WebSocket) -> None:
         # concurrent calls would interleave into nonsense — so it's opt-in here
         # rather than always-on the way it was in test_pipeline.py.
         observers = []
+        if ws_connected_at is not None and conn_id is not None:
+            observers.append(
+                CallTimingObserver(
+                    ws_connected_at=ws_connected_at,
+                    conn_id=conn_id,
+                )
+            )
         latency_csv = os.getenv("NXLYR_LATENCY_CSV")
         if latency_csv:
             from week2_latency_observer import make_week2_latency_observer
@@ -465,8 +552,27 @@ async def run_bot(websocket: WebSocket) -> None:
         # aborts the call, because there is no conversation to have without a
         # KB — a missing Redis only degrades post-call drop classification, and
         # dropping a live buyer over an analytics write would be the worse bug.
+        redis_started_at = monotonic()
         redis_client = await make_redis_client()
+        redis_ms = max(0, int((monotonic() - redis_started_at) * 1000))
         call_resources = CallResources(call_sid=call_sid, redis=redis_client)
+
+        _call_timing(
+            "setup_done",
+            ws_connected_at=ws_connected_at,
+            conn_id=conn_id,
+            kb_ms=kb_ms,
+            kb_source=kb_source,
+            redis_ms=redis_ms,
+            handshake_ms=max(
+                0,
+                int(
+                    (run_bot_started_at - ws_connected_at) * 1000
+                    if ws_connected_at is not None
+                    else 0
+                ),
+            ),
+        )
 
         worker = PipelineWorker(
             pipeline,
@@ -495,6 +601,11 @@ async def run_bot(websocket: WebSocket) -> None:
             # wait on turn 1. It is already seeded into messages, so this frame
             # must not append it to the context a second time.
             logger.info(f"Client connected — sending greeting (call_sid={call_sid})")
+            _call_timing(
+                "greeting_queued",
+                ws_connected_at=ws_connected_at,
+                conn_id=conn_id,
+            )
             await worker.queue_frames(
                 [TTSSpeakFrame(greeting, append_to_context=False)]
             )

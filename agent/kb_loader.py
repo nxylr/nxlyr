@@ -1,8 +1,9 @@
 import os
-import time
 import requests
+from time import monotonic
 from typing import Dict, Any
 from dotenv import load_dotenv
+from loguru import logger
 
 # Load environment variables from .env if present
 load_dotenv()
@@ -21,8 +22,8 @@ def load_kb(project_slug: str) -> Dict[str, Any]:
     Loads property Knowledge Base (KB) config from Supabase REST API by joining
     projects with tenants where tenants.slug matches project_slug.
 
-    Cached in-process per project_slug for _KB_CACHE_TTL_SECONDS; a cache miss
-    or expiry triggers a fresh Supabase fetch.
+    Cached in-process per project_slug. The call path always serves a cached KB,
+    even after its refresh lifetime; only a true cache miss fetches Supabase.
 
     Args:
         project_slug: The tenant slug identifier (e.g. 'nxlyr-demo').
@@ -36,12 +37,31 @@ def load_kb(project_slug: str) -> Dict[str, Any]:
         RuntimeError: If the HTTP request to Supabase fails.
     """
     cached = _kb_cache.get(project_slug)
-    if cached is not None and time.monotonic() - cached[0] < _KB_CACHE_TTL_SECONDS:
+    if cached is not None:
+        age = max(0, int(monotonic() - cached[0]))
+        if age >= _KB_CACHE_TTL_SECONDS:
+            logger.warning(f"Serving stale KB cache_age_seconds={age}")
         return cached[1]
 
+    return refresh_kb(project_slug)
+
+
+def refresh_kb(project_slug: str) -> Dict[str, Any]:
+    """Fetch and cache the current KB without consulting the TTL."""
     config = _fetch_kb(project_slug)
-    _kb_cache[project_slug] = (time.monotonic(), config)
+    _kb_cache[project_slug] = (monotonic(), config)
     return config
+
+
+def cache_age_seconds(project_slug: str) -> int | None:
+    """Return the age of the last good cached KB, or None when none exists."""
+    cached = _kb_cache.get(project_slug)
+    return max(0, int(monotonic() - cached[0])) if cached is not None else None
+
+
+def kb_cache_source(project_slug: str) -> str:
+    """Describe whether load_kb() will use the cache or fetch."""
+    return "cache" if project_slug in _kb_cache else "fetch"
 
 
 def _fetch_kb(project_slug: str) -> Dict[str, Any]:
@@ -69,7 +89,9 @@ def _fetch_kb(project_slug: str) -> Dict[str, Any]:
     }
 
     try:
-        response = requests.get(endpoint, headers=headers, params=params, timeout=10)
+        response = requests.get(
+            endpoint, headers=headers, params=params, timeout=(2.0, 5.0)
+        )
     except requests.RequestException as e:
         raise RuntimeError(f"Network error querying Supabase REST API for '{project_slug}': {e}") from e
 

@@ -21,8 +21,10 @@ import asyncio
 import json
 import os
 import re
-from contextlib import asynccontextmanager
+import secrets
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timezone
+from time import monotonic
 from typing import Any
 
 import aiohttp
@@ -45,6 +47,7 @@ load_dotenv(override=True)
 # WebSocket handler. We want a missing dependency or a broken import to kill the
 # process at boot, not to surface as a dropped call on a live customer.
 from bot import KB_PROJECT_SLUG, run_bot
+import kb_loader
 from demo_guard import (
     CONSENT_TEXTS,
     ConsentStorageError,
@@ -75,7 +78,22 @@ CONTACT_EMAIL_LIMIT = 3
 CONTACT_GLOBAL_LIMIT = 100
 DEMO_RATE_LIMIT_TTL_SECONDS = 24 * 60 * 60
 WS_CLOSE_POLICY_VIOLATION = 1008
+KB_REFRESH_INTERVAL_SECONDS = 240
 ws_admission_counter = AdmissionCounter()
+
+
+async def _refresh_project_kb_forever() -> None:
+    while True:
+        await asyncio.sleep(KB_REFRESH_INTERVAL_SECONDS)
+        try:
+            await asyncio.to_thread(kb_loader.refresh_kb, KB_PROJECT_SLUG)
+        except Exception as error:
+            age = kb_loader.cache_age_seconds(KB_PROJECT_SLUG)
+            age_text = "none" if age is None else str(age)
+            logger.warning(
+                f"KB refresh failed error_type={type(error).__name__} "
+                f"cache_age_seconds={age_text}"
+            )
 
 
 @asynccontextmanager
@@ -96,8 +114,20 @@ async def lifespan(app: FastAPI):
             "TELEGRAM_CHAT_ID is missing"
         )
     try:
+        await asyncio.to_thread(kb_loader.load_kb, KB_PROJECT_SLUG)
+    except Exception as error:
+        logger.error(
+            f"KB preload failed error_type={type(error).__name__}; startup continuing"
+        )
+    refresh_task = asyncio.create_task(
+        _refresh_project_kb_forever(), name="kb-refresh"
+    )
+    try:
         yield
     finally:
+        refresh_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await refresh_task
         logger.info("Closing shared aiohttp.ClientSession")
         await app.state.session.close()
         redis_client = getattr(app.state, "redis", None)
@@ -307,7 +337,12 @@ async def get_demo_redis_client(
 
     import redis.asyncio as redis_asyncio
 
-    client = redis_asyncio.from_url(redis_url, decode_responses=True)
+    client = redis_asyncio.from_url(
+        redis_url,
+        decode_responses=True,
+        socket_connect_timeout=1.0,
+        socket_timeout=2.0,
+    )
     try:
         if ping_timeout_seconds is None:
             await client.ping()
@@ -676,6 +711,9 @@ async def submit_contact(
 async def websocket_endpoint(websocket: WebSocket):
     """Authenticate one Exotel stream before building its paid pipeline."""
     await websocket.accept()
+    ws_connected_at = monotonic()
+    conn_id = secrets.token_hex(3)
+    logger.info(f"call timing: ws_connected conn={conn_id} t_ms=0")
     mode = os.getenv("WS_AUTH_MODE", "log").lower()
     if mode not in {"log", "enforce"}:
         logger.warning("Invalid WS_AUTH_MODE; using log mode")
@@ -741,7 +779,11 @@ async def websocket_endpoint(websocket: WebSocket):
                 return
 
             logger.info("WebSocket admitted — handing off to bot")
-            await run_bot(replay_websocket)
+            await run_bot(
+                replay_websocket,
+                ws_connected_at=ws_connected_at,
+                conn_id=conn_id,
+            )
     except Exception:
         # logger.exception keeps the traceback; the reference prints the bare
         # exception, which loses where it came from.
