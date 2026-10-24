@@ -1,0 +1,7 @@
+# ElevenLabs voice settings: unverified on Flash v2.5, settle before writing code
+
+- `stability` (0.0 to 1.0, default 0.5), `similarity_boost` (0.0 to 1.0, default 0.75), `style` (0.0 to 1.0, default 0.0), `speed` and `use_speaker_boost` are all unset in our code today. ElevenLabs' own reference recommends stability 0.4 / similarity 0.75 / style 0.3 for conversational and 0.8 / 0.6 / 0.0 for professional.
+- UNVERIFIED and blocking: the same reference says "some voice settings are ignored by Flash models, for speed" without naming which. One third-party page lists all four as Flash v2.5 parameters; another says similarity_boost and style are ignored on v3 and v4 Turbo and is silent on Flash. Settle it before writing code.
+- Test: a four-way A/B in the ElevenLabs web app (voice "Neha P", model Flash v2.5), values as stability / similarity_boost / style / speed (`use_speaker_boost` left at default): A 0.5 / 0.75 / 0.0 / 1.0, B 0.65 / 0.70 / 0.0 / 1.0, C 0.45 / 0.75 / 0.30 / 1.0, D 0.55 / 0.75 / 0.15 / 0.95. If B, C and D are indistinguishable from A, Flash ignores them.
+- Also: Pipecat's TOKEN text aggregation would cut the first-sentence wait to near zero but sends fragments to TTS, so it is rejected as a fix for the 145 ms (`2026-10-24-first-sentence-wait-145ms-after-prompt-v2.md`).
+- Sources: https://github.com/elevenlabs/skills/blob/main/text-to-speech/references/voice-settings.md; the two third-party pages are the founder's research notes and are not linked here. Not re-checked by an agent.

@@ -539,11 +539,13 @@ RETURNING p.id,
 ```sql
 SELECT jsonb_path_query(
          p.config,
-         'strict $.** ? (@.type() == "string" && @ like_regex "(whatsapp|brochure|e-?mail|right away| send| sent)" flag "i")'
+         'strict $.** ? (@.type() == "string" && @ like_regex "(whatsapp|brochure|e-?mail|right away| send| sent|share|message|\\mlinks?\\M|shortly|soon|text you)" flag "i")'
        ) AS still_matching
 FROM projects p
 WHERE p.id = '<full uuid>';
 ```
+
+**Widened after the fact (2026-10-24).** The founder ran a wider pattern than the one first written here (it also covers share, message, link, shortly, soon and text you) and got 0 rows; the query above now carries those terms. The exact pattern the founder ran is not recorded in this spec, and the version above has not been run as written: `\\m` and `\\M` are Postgres word-boundary escapes, used so that `link` does not match "linked" in the new plan name "Construction Linked Plan". UNVERIFIED until run.
 
 Zero rows is the pass. A hit is a KB string I have not seen; paste it and I will write a third guarded `UPDATE` in this style. Order after the merge: the two `UPDATE`s in either order, then the 5-minute cache wait, then the smoke call. The exit-test step 7 ("that sounds expensive") is where the new `price` text is checked.
 
@@ -614,7 +616,7 @@ ssh nxlyr-vps "rm -f /tmp/section6_real_call_events.log"
 python3 "/Users/vansh/Desktop/SALES AGENT/tools/latency_report.py" ./events.log --md
 ```
 
-   👀 VERIFY the header reads `instances 0-0` (the smoke call is instance 0 after a fresh deploy, because instance numbers restart; if it reads anything else, the container was not fresh, so use what you see). **N = the last instance number + 1**, expected 1. Also 👀 VERIFY the log has `prompt v2: chars=... lead_source=demo_form disclosure_mode=on_ask company=NXLYR`, that the voice says "Next Layer", and that it speaks the demo greeting.
+   👀 VERIFY the header reads `instances 0-0` (the smoke call is instance 0 after a fresh deploy, because instance numbers restart; if it reads anything else, the container was not fresh, so use what you see). **N = the last instance number + 1**, expected 1. Also 👀 VERIFY the **container log** (`ssh nxlyr-vps "docker logs nxlyr_agent 2>&1 | grep 'prompt v2:'"`, not `events.log`, which holds only latency lines) has `prompt v2: chars=... lead_source=demo_form disclosure_mode=on_ask company=NXLYR`, that the voice says "Next Layer", and that it speaks the demo greeting.
 
 **Setup** (same as the baseline, "How to reproduce"):
 
@@ -640,11 +642,13 @@ scp nxlyr-vps:/tmp/section6_real_call_events.log ./events.log
 grep -cE '[0-9]{10}' ./events.log
 ssh nxlyr-vps "rm -f /tmp/section6_real_call_events.log"
 ssh nxlyr-vps 'for k in $(docker exec nxlyr_redis redis-cli --scan --pattern "session:call:*"); do echo "$k"; docker exec nxlyr_redis redis-cli HMGET "$k" site_visit_booked end_call_tool_invoked transfer_requested call_outcome; done'
-grep -c "TOOL end_call" ./events.log
-grep "TOOL book_site_visit" ./events.log | grep -o "call_sid=[^ ]*" | sort | uniq -c
+ssh nxlyr-vps "docker logs nxlyr_agent 2>&1 | grep -c 'TOOL end_call'"
+ssh nxlyr-vps "docker logs nxlyr_agent 2>&1 | grep 'TOOL book_site_visit' | grep -v REJECTED | grep -o 'call_sid=[^ )]*' | sort | uniq -c"
 ```
 
-The `grep -c` must print 0. Expected for each of the 10 calls, in `HMGET` order: `true`, `false`, `true`, and a blank `call_outcome` (only `end_call` sets it, and no script line says goodbye, so `end_call` should not fire at all). **Any call showing `end_call_tool_invoked` = `true` fails the gate.** Redis alone can miss the bug: audit finding F16 says an outstanding asynchronous booking can overwrite a later end flag with `false`. So the log is a second gate: `grep -c "TOOL end_call"` must print **0** for Part A (no script line says goodbye). The last command counts `TOOL book_site_visit` lines **per call** (one line of output per `call_sid`, with its count). Pass: 10 distinct `call_sid`s, each with a count of 1 or more. A call that booked twice shows 2, which is not a failure; a call with no line at all does not appear in the output, so fewer than 10 output lines is a failure. UNVERIFIED: that the `call_sid=` text survives the 004 log scrubber; if the output is empty, list `grep "TOOL book_site_visit" ./events.log` with timestamps and group the lines into calls by hand. A key with `site_visit_booked` = `true` and no `transfer_requested` is the bug's signature. 👀 VERIFY you see 10 keys; if there are more, ignore keys last written before T0 (a key's TTL is 14400 minus its age in seconds). For any failing call, copy its `TOOL book_site_visit` / `TOOL end_call` lines with timestamps from `./events.log`; they say whether `end_call` came in the same message as the booking (Path A) or the next turn (Path B).
+**The `TOOL` and `prompt v2:` lines are loguru lines, so they are in the container log (`docker logs`), not in `events.log`.** `events.log` is written only by the latency observer and holds `[turn N] …` lines. The version of this section before 2026-10-24 grepped `./events.log` for them; that would have printed 0 for Part A without testing anything and 0 for call 15 on a correct build. The exit sheet (`.agent/reports/exit-014.md`) caught this before the test and the test ran on the `docker logs` form. `grep -v REJECTED` drops refused bookings, whose line has the same `TOOL book_site_visit` prefix.
+
+The `grep -c` must print 0. Expected for each of the 10 calls, in `HMGET` order: `true`, `false`, `true`, and a blank `call_outcome` (only `end_call` sets it, and no script line says goodbye, so `end_call` should not fire at all). **Any call showing `end_call_tool_invoked` = `true` fails the gate.** Redis alone can miss the bug: audit finding F16 says an outstanding asynchronous booking can overwrite a later end flag with `false`. So the log is a second gate: `grep -c "TOOL end_call"` must print **0** for Part A (no script line says goodbye). The last command counts `TOOL book_site_visit` lines **per call** (one line of output per `call_sid`, with its count). Pass: 10 distinct `call_sid`s, each with a count of 1 or more. A call that booked twice shows 2, which is not a failure; a call with no line at all does not appear in the output, so fewer than 10 output lines is a failure. UNVERIFIED: that the `call_sid=` text survives the 004 log scrubber; if the output is empty, list `docker logs nxlyr_agent -t 2>&1 | grep "TOOL book_site_visit"` with timestamps and group the lines into calls by hand. A key with `site_visit_booked` = `true` and no `transfer_requested` is the bug's signature. 👀 VERIFY you see 10 keys; if there are more, ignore keys last written before T0 (a key's TTL is 14400 minus its age in seconds). For any failing call, copy its `TOOL book_site_visit` / `TOOL end_call` lines with timestamps from `docker logs nxlyr_agent -t`; they say whether `end_call` came in the same message as the booking (Path A) or the next turn (Path B).
 
 Latency, from the same log, with the N you read after the smoke call:
 
@@ -659,13 +663,10 @@ python3 "/Users/vansh/Desktop/SALES AGENT/tools/latency_report.py" ./events.log 
 - **Call 15, goodbye after a booking** (the one call where hanging up is the right outcome): say "hello" after the greeting, run steps 2 to 9 of the script up to and including the Saturday 11 am booking, then say "okay, thanks, bye". Expect, 👀 by ear, the closing phrase "Thanks for your time. Have a good day." exactly once and then the call ends, with no extra question after the goodbye. Then run the log and Redis checks below for this call. Expect: **exactly one `TOOL end_call` line in the whole log since T0** (Part A had 0, calls 11-14 end by you hanging up, so call 15 supplies the one), and the call's Redis hash shows `site_visit_booked=true`, `end_call_tool_invoked=true` and a `call_outcome` value.
 
 ```bash
-ssh nxlyr-vps "docker cp nxlyr_agent:/app/section6_real_call_events.log /tmp/"
-scp nxlyr-vps:/tmp/section6_real_call_events.log ./events.log
-ssh nxlyr-vps "rm -f /tmp/section6_real_call_events.log"
-grep -c "TOOL end_call" ./events.log
+ssh nxlyr-vps "docker logs nxlyr_agent 2>&1 | grep -c 'TOOL end_call'"
 ```
 
-The count must print **1**. For the Redis side, re-run the `HMGET` loop from above and read the new key (the one whose `end_call_tool_invoked` is `true`).
+(The container log, not `events.log`; see the note under the Part A flag check.) The count must print **1**. For the Redis side, re-run the `HMGET` loop from above and read the new key (the one whose `end_call_tool_invoked` is `true`).
 
 Also on any one call, ask "which company is this?" and 👀 hear "Next Layer".
 
