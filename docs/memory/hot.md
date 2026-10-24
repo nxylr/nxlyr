@@ -16,7 +16,7 @@ _Last updated: 2026-10-24 by memory close-out (task 016, closing task 014). Upda
 - Payment plan said as a sentence (pass bar 4): no miss reported across the 10 Part A calls; not scored call by call, so this rests on the founder's notes rather than a per-call tally.
 - The live site on `main` still has the F10 overclaims; F04, F05, F10, F11 are open. PRs #29–#31 closed unmerged, branches kept.
 - Outreach to leads stays paused until the truthful tools, do-not-call and consent work (008, 006, 007) are live; demos that prospects call themselves are fine.
-- Merge = deploy. Pushing `main` auto-deploys backend (deploy.yml) and frontend (Vercel).
+- Merge = deploy. Pushing `main` auto-deploys backend (deploy.yml, no path filter, so docs-only merges deploy too) and frontend (Vercel). The first call after any merge or container recreate is cold (slow greeting): do not compare it with the rest of a batch.
 - Schema: `commitments` + `consents` tables exist in prod (migration file not yet committed to repo).
 
 ## In flight

@@ -539,13 +539,13 @@ RETURNING p.id,
 ```sql
 SELECT jsonb_path_query(
          p.config,
-         'strict $.** ? (@.type() == "string" && @ like_regex "(whatsapp|brochure|e-?mail|right away| send| sent|share|message|\\mlinks?\\M|shortly|soon|text you)" flag "i")'
+         'strict $.** ? (@.type() == "string" && @ like_regex "(whatsapp|brochure|e-?mail|sms|right away|(^|[^a-z])(send|sent|share|message|shortly|soon)|links?($|[^a-z])|text you)" flag "i")'
        ) AS still_matching
 FROM projects p
 WHERE p.id = '<full uuid>';
 ```
 
-**Widened after the fact (2026-10-24).** The founder ran a wider pattern than the one first written here (it also covers share, message, link, shortly, soon and text you) and got 0 rows; the query above now carries those terms. The exact pattern the founder ran is not recorded in this spec, and the version above has not been run as written: `\\m` and `\\M` are Postgres word-boundary escapes, used so that `link` does not match "linked" in the new plan name "Construction Linked Plan". UNVERIFIED until run.
+**Widened after the fact (2026-10-24). TESTED.** The query above is the exact pattern the founder ran, replacing the narrower one first written here (`whatsapp|brochure|e-?mail|right away| send| sent`); it adds sms, share, message, link, shortly, soon and text you. It was run against the real demo project config in Supabase on 2026-10-23 and returned 0 rows. The same pattern was tested on a scratch Postgres 16 with planted strings: it matched "We will send you the layout" and "see the links page" and did not match "Linked Plan" or "representative" (`links?($|[^a-z])` cannot match "linked", because the character after "link" is "e"; `(^|[^a-z])` stops "send", "sent" and the others matching inside longer words). Reported by the founder, not run by an agent.
 
 Zero rows is the pass. A hit is a KB string I have not seen; paste it and I will write a third guarded `UPDATE` in this style. Order after the merge: the two `UPDATE`s in either order, then the 5-minute cache wait, then the smoke call. The exit-test step 7 ("that sounds expensive") is where the new `price` text is checked.
 
