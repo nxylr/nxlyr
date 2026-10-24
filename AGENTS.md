@@ -94,6 +94,7 @@ PY="$MAIN/agent/venv/bin/python"
 # backend unit tests (from the repository/worktree root)
 "$PY" -m unittest agent.test_ws_auth      # F01 admission tests; mocked Redis, no live service
 "$PY" -m unittest agent.test_kb_loader    # 5 known errors on main (F23): setUp calls load_kb.cache_clear, which load_kb lacks
+"$PY" -m unittest agent.test_prompt       # prompt text, greeting, tool strings (task 014); no network
 # backend import smoke (from agent/ of the worktree)
 (cd agent && "$PY" -c "import server, week2_latency_observer")  # matches Dockerfile
 # No backend Ruff command yet: Ruff has no repository config or declared dependency.

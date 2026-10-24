@@ -16,3 +16,6 @@ Full records in `docs/adr/`. One line each; newest last.
 - 2026-10-23: Prompt v2 AI disclosure: the bot says it is an AI only when asked, and then at once and truthfully, never denying it. **Pending the lawyer's answer on TRAI and DPDP**; if the answer requires disclosure up front, this decision changes.
 - 2026-10-23: The agent is named Aarya, with a female voice.
 - 2026-10-23: The caller's name comes from a demo-form field now and from lead ingestion later. The form of address (sir, ma'am or name only) is chosen by the visitor or taken from the lead record, never guessed from the name. With no name, the bot never uses one.
+- 2026-10-24: AI disclosure is `on_ask` for the demo (`AI_DISCLOSURE_MODE` in `agent/prompt.py`): the bot says it is an AI only when asked, then at once and truthfully. `upfront` is reserved for a pilot, and the lawyer's answer on TRAI and DPDP is still pending.
+- 2026-10-24: The spoken company name is "Next Layer" (`COMPANY_SPOKEN`); "NXLYR" appears only in logs, UI and docs (`COMPANY_DISPLAY`). The prompt and every spoken string use the spoken form.
+- 2026-10-24: The payment plan is said as one plain sentence, not a ratio, using a `spoken` key in the knowledge base (`payment_plan.spoken`).
