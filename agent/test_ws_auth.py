@@ -142,18 +142,20 @@ class WsAuthTests(unittest.IsolatedAsyncioTestCase):
         websocket = FakeEndpointWebSocket(
             [connected, RuntimeError("binary frame")], FakeRedis()
         )
+        replayed_messages = []
 
-        async def assert_replayed(replay_websocket) -> None:
-            self.assertEqual(await replay_websocket.receive_text(), connected)
+        async def capture_replayed(replay_websocket, **_timing) -> None:
+            replayed_messages.append(await replay_websocket.receive_text())
 
         with (
             patch.dict(os.environ, {"WS_AUTH_MODE": "log"}, clear=False),
             patch.object(server, "ws_admission_counter", server.AdmissionCounter()),
-            patch.object(server, "run_bot", new=AsyncMock(side_effect=assert_replayed)) as run_bot,
+            patch.object(server, "run_bot", new=AsyncMock(side_effect=capture_replayed)) as run_bot,
         ):
             await server.websocket_endpoint(websocket)
 
         run_bot.assert_awaited_once()
+        self.assertEqual(replayed_messages, [connected])
 
     async def test_request_demo_call_issues_a_binding(self) -> None:
         server = import_server_without_dotenv()
