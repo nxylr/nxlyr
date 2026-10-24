@@ -18,7 +18,7 @@
 - Repo copy of `docker-compose.yml`: agent and redis publish on `127.0.0.1` only; both read `env_file: /mnt/secrets/.env`. A local `docker-compose.override.yml` (gitignored) repoints env_file for laptops.
 - Repo copy of `infra/nginx/api.infrasmith.dev.conf` (not necessarily what is live): proxies `/ws` (prefix), `/demo/call` (prefix, CORS for `https://nxlyr.vercel.app`) and `= /contact` to `127.0.0.1:7860`. Everything else, including `/start` and `/health`, falls to static `location /` → 404. So `/health` returns an nginx 404 externally (observed by the human too); the container healthcheck hits it on loopback. The real gate is a real call.
 - Frontend: Next.js in `dashboard/`, Vercel production follows `main`.
-- CI/CD: `.github/workflows/deploy.yml` — on push to `main`: SSH → `cd /opt/nxlyr && git pull origin main && docker compose up -d --build`. No concurrency control. Build runs an `import server` smoke. No workflow runs the unit tests; `lint.yml` checks `api/` (empty) and always passes.
+- CI/CD: `.github/workflows/deploy.yml` — on push to `main`: SSH → `cd /opt/nxlyr && git pull origin main && docker compose up -d --build`. No path filter: every push to `main`, including a docs-only merge, runs the SSH step (checked in the workflow file on 2026-10-24), so every merge is a redeploy attempt. Whether `docker compose up -d --build` recreates the container for a docs-only change depends on whether the image changes (UNVERIFIED). No concurrency control. Build runs an `import server` smoke. No workflow runs the unit tests; `lint.yml` checks `api/` (empty) and always passes.
 - Local runs: `agent/venv` exists only in the main checkout (gitignored); see AGENTS.md "Commands".
 
 ## Supabase tables (live)
