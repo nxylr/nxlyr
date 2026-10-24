@@ -19,3 +19,4 @@ Full records in `docs/adr/`. One line each; newest last.
 - 2026-10-24: AI disclosure is `on_ask` for the demo (`AI_DISCLOSURE_MODE` in `agent/prompt.py`): the bot says it is an AI only when asked, then at once and truthfully. `upfront` is reserved for a pilot, and the lawyer's answer on TRAI and DPDP is still pending.
 - 2026-10-24: The spoken company name is "Next Layer" (`COMPANY_SPOKEN`); "NXLYR" appears only in logs, UI and docs (`COMPANY_DISPLAY`). The prompt and every spoken string use the spoken form.
 - 2026-10-24: The payment plan is said as one plain sentence, not a ratio, using a `spoken` key in the knowledge base (`payment_plan.spoken`).
+- 2026-10-24: The model-preload follow-up (spec 015, Part 3) is closed. The VPS figure after 015 is `models_ms` 111 / 102 / 98 ms against the 150 ms threshold, so the VAD and Smart Turn analyzers stay built per call, off the event loop. Reopen it only if `models_ms` goes over 150 ms.
