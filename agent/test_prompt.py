@@ -277,31 +277,64 @@ class PromptV2Tests(unittest.TestCase):
         )
 
     def test_p08_booking_result(self) -> None:
-        captured: dict[str, Any] = {}
+        captured: list[dict[str, Any]] = []
 
         async def result_callback(
             result: dict[str, Any], *, properties: Any | None = None
         ) -> None:
-            captured["result"] = result
+            captured.append(result)
+
+        async def fake_commit(session: Any, **kwargs: Any) -> Any:
+            if session is None:
+                raise tools.commitments.CommitmentError("store", "not_configured")
+            return tools.commitments.CommitResult("test-reference")
 
         async def run() -> None:
-            await tools.book_site_visit(
-                FunctionCallParams(
-                    function_name="book_site_visit",
-                    tool_call_id="test-call",
-                    arguments={"preferred_date": date.today().isoformat()},
-                    llm=None,
-                    pipeline_worker=None,
-                    context=None,
-                    result_callback=result_callback,
-                    app_resources=None,
+            with (
+                patch.object(
+                    tools.commitments,
+                    "now_ist",
+                    return_value=tools.commitments.datetime(
+                        2026, 10, 25, 8, 0, tzinfo=tools.commitments.IST
+                    ),
+                ),
+                patch.object(tools.commitments, "commit_visit", fake_commit),
+            ):
+                arguments = {
+                    "preferred_date": "2026-10-26",
+                    "preferred_time": "11:00",
+                }
+                await tools.book_site_visit(
+                    FunctionCallParams(
+                        function_name="book_site_visit",
+                        tool_call_id="test-call-success",
+                        arguments=arguments,
+                        llm=None,
+                        pipeline_worker=None,
+                        context=None,
+                        result_callback=result_callback,
+                        app_resources=tools.CallResources(
+                            "call-1", http_session=object()
+                        ),
+                    )
                 )
-            )
+                await tools.book_site_visit(
+                    FunctionCallParams(
+                        function_name="book_site_visit",
+                        tool_call_id="test-call-failure",
+                        arguments=arguments,
+                        llm=None,
+                        pipeline_worker=None,
+                        context=None,
+                        result_callback=result_callback,
+                        app_resources=None,
+                    )
+                )
 
         asyncio.run(run())
-        self.assertEqual(captured["result"]["status"], "booked")
-        self.assertIn("not over", captured["result"]["next_step"])
-        self.assertNotIn("end_call", captured["result"]["next_step"])
+        self.assertEqual(captured[0]["status"], "booked")
+        self.assertNotIn("end_call", captured[0]["next_step"])
+        self.assertEqual(captured[1]["status"], "not_confirmed")
 
     def test_p09_closing_phrase(self) -> None:
         self.assertIs(tools.CLOSING_PHRASE, prompt.CLOSING_PHRASE)

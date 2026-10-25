@@ -46,9 +46,10 @@ worker process.
 
 import asyncio
 import os
+import re
 from contextlib import suppress
 from dataclasses import dataclass
-from datetime import date
+from time import monotonic
 from typing import Any
 
 from loguru import logger
@@ -58,6 +59,7 @@ from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.frames.frames import FunctionCallResultProperties, TTSSpeakFrame
 from pipecat.services.llm_service import FunctionCallParams
 
+import commitments
 from prompt import CLOSING_PHRASE
 
 # The closing line end_call speaks. Fixed rather than model-authored, for the
@@ -77,6 +79,8 @@ from prompt import CLOSING_PHRASE
 # CallResources.session_key), so if this module doesn't expire the key, nothing
 # will and it leaks for the lifetime of the Redis volume.
 SESSION_TTL_SECONDS = 14400
+FLAGS_TIMEOUT_S = 0.25
+_IN_FLIGHT_COMMITMENTS: set[asyncio.Task[Any]] = set()
 
 
 @dataclass
@@ -96,6 +100,9 @@ class CallResources:
 
     call_sid: str | None
     redis: Any | None = None
+    http_session: Any | None = None
+    lead_phone: str | None = None
+    booking_attempts: int = 0
 
     @property
     def session_key(self) -> str:
@@ -127,67 +134,153 @@ def _resources(params: FunctionCallParams) -> CallResources | None:
     return resources if isinstance(resources, CallResources) else None
 
 
-async def _set_session_flag(
-    resources: CallResources | None, field: str, value: str
-) -> None:
-    """HSET one field on the call's Redis session hash, best-effort.
-
-    Deliberately swallows every Redis error after logging it. This is the
-    opposite of kb_loader.load_kb()'s fail-loud policy, and the difference is
-    intentional: a call cannot proceed without its KB, but it proceeds fine
-    without an analytics flag. Letting a Redis blip abort a live conversation
-    with a real buyer would be a far worse failure than the degraded drop
-    classification we get from a missing flag.
-    """
+async def _set_session_flags(
+    resources: CallResources | None,
+    fields: dict[str, str],
+    *,
+    if_absent: tuple[str, ...] = (),
+) -> bool:
+    """Write one tool's Redis fields atomically, best-effort."""
+    started = monotonic()
+    field_names = ",".join(sorted(fields))
     if resources is None or resources.redis is None:
         logger.warning(
-            f"No Redis client available — skipping {field}={value} "
-            f"(call_sid={resources.call_sid if resources else None})"
+            "flags write FAILED call_sid={} fields={} error_type={} ms={}",
+            resources.call_sid if resources else None,
+            field_names,
+            "Unavailable",
+            max(0, int((monotonic() - started) * 1000)),
         )
-        return
+        return False
 
     try:
-        await resources.redis.hset(resources.session_key, field, value)
-        # Re-applied on every write rather than set once: the hash may not have
-        # existed before the first HSET (see CallResources.session_key), and
-        # re-arming a 4h TTL mid-call is harmless.
-        await resources.redis.expire(resources.session_key, SESSION_TTL_SECONDS)
-        logger.info(f"Redis {resources.session_key} {field}={value}")
-    except Exception as e:
-        logger.error(
-            f"Failed to set {field}={value} on {resources.session_key}: {e} "
-            "— call continues, post-call classification will be degraded"
+        pipeline = resources.redis.pipeline(transaction=True)
+        regular = {key: value for key, value in fields.items() if key not in if_absent}
+        if regular:
+            pipeline.hset(resources.session_key, mapping=regular)
+        for field in if_absent:
+            if field in fields:
+                pipeline.hsetnx(resources.session_key, field, fields[field])
+        pipeline.expire(resources.session_key, SESSION_TTL_SECONDS)
+        async with asyncio.timeout(FLAGS_TIMEOUT_S):
+            await pipeline.execute()
+        logger.info(
+            "flags write ok call_sid={} fields={} ms={}",
+            resources.call_sid,
+            field_names,
+            max(0, int((monotonic() - started) * 1000)),
         )
+        return True
+    except Exception as error:
+        logger.error(
+            "flags write FAILED call_sid={} fields={} error_type={} ms={}",
+            resources.call_sid,
+            field_names,
+            type(error).__name__,
+            max(0, int((monotonic() - started) * 1000)),
+        )
+        return False
+
+
+def _pre_call_text(params: FunctionCallParams) -> tuple[int | None, str]:
+    context = params.context
+    if context is None:
+        return None, "unknown"
+    try:
+        messages = context.get_messages()
+        assistant = next(
+            (
+                message
+                for message in reversed(messages)
+                if isinstance(message, dict) and message.get("role") == "assistant"
+            ),
+            None,
+        )
+        if assistant is None:
+            return 0, "no"
+        content = assistant.get("content")
+        text = content if isinstance(content, str) else ""
+    except Exception:
+        return None, "unknown"
+    done = bool(re.search(r"\b(?:booked|confirmed|done)\b", text, re.IGNORECASE))
+    return len(text), "yes" if done else "no"
+
+
+def _log_pre_call(params: FunctionCallParams, tool_name: str, call_sid: str | None) -> None:
+    length, done_word = _pre_call_text(params)
+    chars = "unknown" if length is None else str(length)
+    logger.info(
+        "TOOL {} pre_call_text_chars={} pre_call_done_word={} call_sid={}",
+        tool_name,
+        chars,
+        done_word,
+        call_sid,
+    )
+
+
+async def _fixed_result(
+    params: FunctionCallParams, result: dict[str, Any], sentence: str
+) -> None:
+    worker = params.pipeline_worker
+    if worker is not None:
+        await worker.queue_frames([TTSSpeakFrame(sentence, append_to_context=True)])
+    else:
+        logger.warning("fixed tool sentence not queued: no pipeline worker")
+    await params.result_callback(
+        result,
+        properties=FunctionCallResultProperties(run_llm=False),
+    )
+
+
+def _start_commitment_workflow(commit_awaitable: Any, after_alert: Any) -> asyncio.Future:
+    """Hold commit through finalization while publishing its post-alert result."""
+    loop = asyncio.get_running_loop()
+    result_ready = loop.create_future()
+
+    def consume_unobserved_result(done: asyncio.Future) -> None:
+        if not done.cancelled():
+            done.exception()
+
+    result_ready.add_done_callback(consume_unobserved_result)
+
+    async def workflow() -> None:
+        try:
+            result = await commit_awaitable
+        except Exception as error:
+            if not result_ready.done():
+                result_ready.set_exception(error)
+            return
+
+        if not result_ready.done():
+            result_ready.set_result(result)
+        try:
+            await after_alert(result)
+        except Exception as error:
+            logger.warning(
+                "commitment finalize FAILED error_type={}", type(error).__name__
+            )
+
+    task = asyncio.create_task(workflow())
+    _IN_FLIGHT_COMMITMENTS.add(task)
+
+    def workflow_finished(done: asyncio.Task[Any]) -> None:
+        _IN_FLIGHT_COMMITMENTS.discard(done)
+        try:
+            error = done.exception()
+        except asyncio.CancelledError:
+            error = None
+        if error is not None:
+            logger.warning(
+                "commitment background FAILED error_type={}", type(error).__name__
+            )
+
+    task.add_done_callback(workflow_finished)
+    return result_ready
 
 
 # ---------------------------------------------------------------------------
 # book_site_visit
 # ---------------------------------------------------------------------------
-
-
-def _validate_visit_date(preferred_date: Any) -> str | None:
-    """Return an error string if preferred_date isn't a usable future date.
-
-    Returns None when the date is fine. Today counts as valid — a caller can
-    legitimately ask to visit this afternoon.
-    """
-    if not preferred_date:
-        return "preferred_date is required"
-    try:
-        parsed = date.fromisoformat(str(preferred_date))
-    except ValueError:
-        return (
-            f"preferred_date {preferred_date!r} is not a valid YYYY-MM-DD date. "
-            "Ask the caller to confirm the day and call again."
-        )
-    today = date.today()
-    if parsed < today:
-        return (
-            f"preferred_date {parsed.isoformat()} is in the past (today is "
-            f"{today.isoformat()}). Confirm the intended date with the caller "
-            "and call again."
-        )
-    return None
 
 
 # cancel_on_interruption=False. The default is True, which means an
@@ -206,63 +299,128 @@ def _validate_visit_date(preferred_date: Any) -> str | None:
 # caller waits in silence for.
 @tool_options(cancel_on_interruption=False)
 async def book_site_visit(params: FunctionCallParams) -> None:
-    """Record a site visit the lead has agreed to.
-
-    Persistence to the leads table (UPDATE lead SET status='site_visit_booked',
-    site_visit_date=...) is Flow 2's job (03_SOFTWARE_FLOW.md:187-190) and
-    depends on the Supabase call/lead records that Week 5's call-worker
-    creates. Until those exist this logs the booking as a structured event and
-    reports success to the model, so the confirmation the bot speaks is at
-    least backed by a real, greppable record rather than by nothing at all.
-    """
+    """Store and alert a visit before reporting it as booked."""
     resources = _resources(params)
     preferred_date = params.arguments.get("preferred_date")
     preferred_time = params.arguments.get("preferred_time")
     notes = params.arguments.get("notes")
+    call_sid = resources.call_sid if resources else None
+    _log_pre_call(params, "book_site_visit", call_sid)
 
-    logger.info(
-        f"TOOL book_site_visit — call_sid={resources.call_sid if resources else None} "
-        f"date={preferred_date!r} time={preferred_time!r} notes={notes!r}"
-    )
-
-    # Belt and braces behind the [CURRENT DATE] prompt block. The first Task
-    # 4.1 harness run had gpt-4o resolve "Saturday the 15th of August" to
-    # 2024-08-15 — well-formed and two years stale — because nothing in the
-    # prompt told it what day it was. The prompt block is the actual fix; this
-    # is the guard that stops a regression there from being invisible, since a
-    # past-dated booking looks exactly like a good one in the logs.
-    #
-    # Refuses rather than warns: the whole point of this task is that the bot
-    # must not confirm bookings that aren't real. Returning an error gives the
-    # model a chance to re-ask the caller, which is the honest recovery.
-    date_error = _validate_visit_date(preferred_date)
-    if date_error:
-        logger.error(
-            f"TOOL book_site_visit REJECTED — {date_error} "
-            f"(call_sid={resources.call_sid if resources else None})"
+    if not call_sid:
+        logger.warning("TOOL book_site_visit REJECTED reason=missing_call_sid")
+        await _fixed_result(
+            params,
+            {"status": "not_confirmed", "say": commitments.BOOKING_NOT_CONFIRMED},
+            commitments.BOOKING_NOT_CONFIRMED,
         )
-        await params.result_callback({"status": "error", "error": date_error})
         return
 
-    # Explicitly false, not merely absent. 03_SOFTWARE_FLOW.md:190 calls this
-    # out: a booking is not a call ending — the conversation may well continue
-    # after it — so Flow 3 must not read a successful booking as a clean close.
-    await _set_session_flag(resources, "end_call_tool_invoked", "false")
-    await _set_session_flag(resources, "site_visit_booked", "true")
-    if preferred_date:
-        await _set_session_flag(resources, "site_visit_date", str(preferred_date))
+    parsed = commitments.parse_visit(preferred_date, preferred_time)
+    if isinstance(parsed, commitments.VisitError):
+        logger.warning(
+            "TOOL book_site_visit REJECTED reason={} call_sid={}",
+            parsed.reason,
+            call_sid,
+        )
+        await _fixed_result(
+            params,
+            {"status": "error", "reason": parsed.reason, "say": parsed.say},
+            parsed.say,
+        )
+        return
+    visit_date, visit_time = parsed
+    lookup_previous = bool(resources and resources.booking_attempts > 0)
+    if resources:
+        resources.booking_attempts += 1
+    async def after_alert(result: commitments.CommitResult) -> None:
+        await commitments.finalize_visit(
+            resources.http_session if resources else None,
+            call_sid=call_sid,
+            result=result,
+        )
+        await _set_session_flags(
+            resources,
+            {
+                "end_call_tool_invoked": "false",
+                "site_visit_booked": "true",
+                "site_visit_date": visit_date.isoformat(),
+            },
+            if_absent=("end_call_tool_invoked",),
+        )
 
-    await params.result_callback(
-        {
-            "status": "booked",
-            "preferred_date": preferred_date,
-            "preferred_time": preferred_time,
-            "next_step": (
-                "Visit recorded. Confirm the day and time in one sentence. The call is "
-                "not over: do not hang up; let the caller lead."
-            ),
-        }
+    result_ready = _start_commitment_workflow(
+        commitments.commit_visit(
+            resources.http_session if resources else None,
+            project_slug=commitments.PROJECT_SLUG,
+            call_sid=call_sid,
+            visit_date=visit_date,
+            visit_time=visit_time,
+            notes=notes,
+            phone=resources.lead_phone if resources else None,
+            lookup_previous=lookup_previous,
+        ),
+        after_alert,
     )
+    try:
+        result = await asyncio.shield(result_ready)
+    except commitments.AlertError as error:
+        logger.error(
+            "commitment FAILED stage=alert call_sid={} error_type={} http_status={} db_ms={} tg_ms={}",
+            call_sid,
+            type(error).__name__,
+            error.status,
+            error.db_ms,
+            error.tg_ms,
+        )
+        await _fixed_result(
+            params,
+            {"status": "not_confirmed", "say": commitments.BOOKING_NOT_CONFIRMED},
+            commitments.BOOKING_NOT_CONFIRMED,
+        )
+        return
+    except commitments.CommitmentError as error:
+        logger.error(
+            "commitment FAILED stage={} call_sid={} error_type={} http_status={} db_ms={} tg_ms={}",
+            error.stage,
+            call_sid,
+            type(error).__name__,
+            error.status,
+            error.db_ms,
+            error.tg_ms,
+        )
+        await _fixed_result(
+            params,
+            {"status": "not_confirmed", "say": commitments.BOOKING_NOT_CONFIRMED},
+            commitments.BOOKING_NOT_CONFIRMED,
+        )
+        return
+
+    visit_text = f"{visit_date:%A}, {visit_date.day} {visit_date:%B}, {visit_time:%H:%M} IST"
+    payload = {
+        "status": "booked",
+        "reference": result.reference,
+        "visit": visit_text,
+        "alert": "sent",
+        "next_step": (
+            "Confirm the day and time in one sentence; you may say the team has "
+            "been told. Give no time for a follow-up and keep the call going."
+        ),
+    }
+    if result.replaces:
+        replaced = "; ".join(
+            f"{item.visit_date:%A}, {item.visit_date.day} {item.visit_date:%B}, "
+            f"{item.visit_time:%H:%M}"
+            for item in result.replaces
+        )
+        payload["replaces"] = replaced
+        payload["next_step"] = (
+            "Confirm the new day and time in one sentence and say it replaces the "
+            "earlier booking; you may say the team has been told. Give no time for "
+            "a follow-up."
+        )
+    logger.info("TOOL book_site_visit result status=booked call_sid={}", call_sid)
+    await params.result_callback(payload)
 
 
 BOOK_SITE_VISIT_SCHEMA = FunctionSchema(
@@ -276,7 +434,7 @@ BOOK_SITE_VISIT_SCHEMA = FunctionSchema(
         "preferred_time": {"type": "string", "description": "HH:MM in 24h format"},
         "notes": {"type": "string"},
     },
-    required=["preferred_date"],
+    required=["preferred_date", "preferred_time"],
     handler=book_site_visit,
 )
 
@@ -292,44 +450,89 @@ BOOK_SITE_VISIT_SCHEMA = FunctionSchema(
 # talking while the handoff is arranged must not silently un-arrange it.
 @tool_options(cancel_on_interruption=False)
 async def transfer_to_human(params: FunctionCallParams) -> None:
-    """Hand the call off to a human agent.
-
-    The actual Exotel call bridge (03_SOFTWARE_FLOW.md:192-195) needs a
-    configured human-agent DID and Exotel's bridge API, neither of which is
-    wired up yet. Logging the transfer request with its full context summary is
-    the honest interim behaviour: the model gets a truthful "requested, not yet
-    connected" result rather than a fabricated success, so it says something it
-    can actually stand behind.
-    """
+    """Store and alert a callback request before reporting it as passed on."""
     resources = _resources(params)
     reason = params.arguments.get("reason")
     context_summary = params.arguments.get("context_summary")
+    call_sid = resources.call_sid if resources else None
+    _log_pre_call(params, "transfer_to_human", call_sid)
+    if not call_sid:
+        logger.warning("TOOL transfer_to_human REJECTED reason=missing_call_sid")
+        await _fixed_result(
+            params,
+            {"status": "not_passed_on", "say": commitments.CALLBACK_NOT_PASSED_ON},
+            commitments.CALLBACK_NOT_PASSED_ON,
+        )
+        return
+    notes = " — ".join(str(value) for value in (reason, context_summary) if value)
+    async def after_alert(result: commitments.CommitResult) -> None:
+        await commitments.finalize_callback(
+            resources.http_session if resources else None,
+            call_sid=call_sid,
+            result=result,
+        )
+        await _set_session_flags(
+            resources,
+            {
+                "transfer_requested": "true",
+                "transfer_reason": str(reason or "")[:500],
+            },
+        )
 
-    logger.info(
-        f"TOOL transfer_to_human — call_sid={resources.call_sid if resources else None} "
-        f"reason={reason!r} context_summary={context_summary!r}"
+    result_ready = _start_commitment_workflow(
+        commitments.commit_callback(
+            resources.http_session if resources else None,
+            project_slug=commitments.PROJECT_SLUG,
+            call_sid=call_sid,
+            notes=notes,
+            phone=resources.lead_phone if resources else None,
+        ),
+        after_alert,
     )
+    try:
+        result = await asyncio.shield(result_ready)
+    except commitments.AlertError as error:
+        logger.error(
+            "commitment FAILED stage=alert call_sid={} error_type={} http_status={} db_ms={} tg_ms={}",
+            call_sid,
+            type(error).__name__,
+            error.status,
+            error.db_ms,
+            error.tg_ms,
+        )
+        await _fixed_result(
+            params,
+            {"status": "not_passed_on", "say": commitments.CALLBACK_NOT_PASSED_ON},
+            commitments.CALLBACK_NOT_PASSED_ON,
+        )
+        return
+    except commitments.CommitmentError as error:
+        logger.error(
+            "commitment FAILED stage={} call_sid={} error_type={} http_status={} db_ms={} tg_ms={}",
+            error.stage,
+            call_sid,
+            type(error).__name__,
+            error.status,
+            error.db_ms,
+            error.tg_ms,
+        )
+        await _fixed_result(
+            params,
+            {"status": "not_passed_on", "say": commitments.CALLBACK_NOT_PASSED_ON},
+            commitments.CALLBACK_NOT_PASSED_ON,
+        )
+        return
 
-    await _set_session_flag(resources, "transfer_requested", "true")
-    if reason:
-        await _set_session_flag(resources, "transfer_reason", str(reason))
-
-    # next_step spells out in the result what bridge_connected=False implies,
-    # rather than leaving the model to infer it. On the first Task 4.1 harness
-    # run it read the honest `bridge_connected: false` and still told the
-    # caller "they'll be reaching out to you shortly" — nobody was going to.
-    # The [CORE RULES] prompt block is the primary fix; this puts the same
-    # correction directly in the model's context at the moment it composes the
-    # handoff sentence.
+    logger.info("TOOL transfer_to_human result status=passed_on call_sid={}", call_sid)
     await params.result_callback(
         {
-            "status": "transfer_requested",
+            "status": "passed_on",
+            "reference": result.reference,
+            "alert": "sent",
             "bridge_connected": False,
-            "reason": reason,
             "next_step": (
-                "Logged for a colleague to pick up. Nobody is on the line and "
-                "no callback is scheduled yet — tell the caller a colleague "
-                "will get back to them, and do not promise a timeframe."
+                'Say exactly: "I\'ve passed your question to a colleague. I can\'t '
+                'connect you now, but they have it." Give no time. Do not offer to connect.'
             ),
         }
     )
@@ -397,28 +600,14 @@ async def end_call(params: FunctionCallParams) -> None:
     outcome = params.arguments.get("outcome")
     summary = params.arguments.get("summary")
 
+    outcome_kind = outcome if outcome in END_CALL_OUTCOMES else "other"
     logger.info(
-        f"TOOL end_call — call_sid={resources.call_sid if resources else None} "
-        f"outcome={outcome!r} summary={summary!r}"
+        "TOOL end_call call_sid={} outcome={} summary_chars={}",
+        resources.call_sid if resources else None,
+        outcome_kind,
+        len(str(summary or "")),
     )
 
-    # THE FLAG. Scoped in Week 3 planning (06_IMPLEMENTATION_PLAN.md:107) and
-    # again in Week 4 (line 257), never implemented until now. Flow 3's webhook
-    # handler (03_SOFTWARE_FLOW.md:256-262) branches on it: call.completed with
-    # the flag true is a CLEAN_COMPLETION; call.completed with it false is a
-    # DROP, duration-classified into drop_type 1-4 and potentially scheduled for
-    # a resumption call. Without this write every clean bot-initiated ending
-    # would be misfiled as a dropped call and the lead re-dialled for no reason.
-    #
-    # Written before the goodbye is spoken, deliberately: if the carrier tears
-    # the leg down during the closing phrase, the ending was still clean and the
-    # flag should already say so.
-    await _set_session_flag(resources, "end_call_tool_invoked", "true")
-    if outcome:
-        await _set_session_flag(resources, "call_outcome", str(outcome))
-
-    # No PipelineWorker under prompt_harness.py — the flag write and the
-    # outcome logging above are the testable part there; the shutdown is not.
     worker = params.pipeline_worker
     if worker is None:
         logger.warning("end_call: no pipeline_worker available — cannot end the call")
@@ -431,6 +620,10 @@ async def end_call(params: FunctionCallParams) -> None:
     await worker.queue_frames([TTSSpeakFrame(CLOSING_PHRASE)])
 
     async def _stop_pipeline() -> None:
+        fields = {"end_call_tool_invoked": "true"}
+        if outcome:
+            fields["call_outcome"] = str(outcome)
+        await _set_session_flags(resources, fields)
         logger.info(
             f"end_call: goodbye queued, scheduling pipeline stop "
             f"(call_sid={resources.call_sid if resources else None})"
@@ -505,7 +698,7 @@ async def make_redis_client() -> Any | None:
     has touched it before now.
 
     Returns None rather than raising on a missing REDIS_URL or an unreachable
-    server, for the reason given on _set_session_flag: the session flag is
+    server, for the reason given on _set_session_flags: the session flag is
     valuable, but not so valuable that a live sales call should die for it.
     """
     redis_url = os.getenv("REDIS_URL")
