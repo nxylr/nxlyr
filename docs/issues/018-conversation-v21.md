@@ -843,3 +843,39 @@ Public sources behind the changes. No research files were added to the repo. "Fe
 | 9 kill switch | Yes, in Redis | Change 0 |
 | 10 ban list | OK; a bare "Right." must be caught | Change 1, Change 6 `banned` |
 | 11 `prompt v2:` label | Keep, append `version=` | Change 0, test G04 |
+
+## Amendments after review (founder-approved)
+
+Added after the r3 approval and three review rounds. The r3 text above is not rewritten: where it differs from the code, this section and `agent/prompt.py` win. The review fixes to the code itself (service class name, `stt check` sanitiser, harness flags and the rest) are listed in the PR body, not here.
+
+**1. Closing-question rule (final v21 text, replaces the "About one reply in three…" rule above).**
+
+```text
+- Most replies end with a statement. End a reply with a question only when the call cannot move on without the answer: whether the home is for them or an investment, a choice between two things, or a day and time. Never ask more than one question in a reply, never end two replies in a row with a question, and never ask a question after a goodbye. After you answer a question, stop. Never end with a general offer such as "Would you like to know more?", "Anything else you'd like to know?", "Is there anything else?", "How can I help you?" or "What would you like to know?".
+```
+
+**2. Booking rule (final v21 text; new, sits immediately after the shared three-functions rule).**
+
+```text
+- Never say a visit is booked, put down, noted or passed on unless you call the function in that same reply, or a function result has just told you it is done. If neither, ask for what is missing instead.
+```
+
+**3. Removed booking sample.** The v21 sample `Caller: Saturday at eleven works for me.` / `You: You're down for Saturday, eleven in the morning.` is removed. v21 now has eight samples, four of them ending in a question (test N03); the sample list above, which shows nine, is superseded. The v2 sample is unchanged.
+
+**4. [HOW THE CALL GOES], second line.**
+
+Before (r3):
+
+```text
+- Then learn what matters most to them, one question at a time: size, budget, location or timing. Spread your questions across the call; never ask several in a row.
+```
+
+After:
+
+```text
+- Then learn what matters most to them by asking about one thing at a time, such as which size suits them. Never offer a list of topics to choose from. Spread your questions across the call.
+```
+
+**5. Size.** The v21 empty-KB prompt is **8,763 characters** (v2 is unchanged at 4,769). The v21 cap in test N08 is raised from 8,664 to **9,063** (size plus 300, the same rule as before). The 8,364, 8,664 and 11,547 figures above are superseded; the r3 block as written actually renders at 8,372.
+
+**6. `agent/test_prompt.py`.** The r3 file list says it stays untouched. One change was made, to the regex in `test_p17_greeting_frame`, so it matches the real `build_initial_messages(..., version=convo_cfg.prompt_version)` call (review 1, finding R1-03).

@@ -1,0 +1,57 @@
+# S1 — the 014 script in call order; the three new steps are inside existing turns
+Hi Aarya.                                          # step 1 (was "hello")
+yes
+I was looking at a couple of options, my brother stays nearby, and I need to be sure about the possession date, the location and everything before I decide anything
+my budget is around one point two crore            # step 4: below the range (2.2), not far below: take as heard, say where prices start
+tell me about Meridian Heights                     # step 5, in a sentence
+that sounds expensive
+what's the payment plan?
+can you WhatsApp me the details?
+can I visit on Saturday at 11 am?
+can I talk to a real person?
+---
+# S2 — greetings at the start
+Hello Aarya.
+---
+Hi.
+---
+# S3 — are-you-there mid-call, and the re-introduction stress (call 3 of 24 Oct)
+yes, go ahead
+sounds good
+that sounds expensive
+hello?
+are you there?
+---
+# S4 — project name as Deepgram might return it
+tell me about Eridian Heights
+what about Meridian Height
+is Meridian Heights ready to move in?
+---
+# S5 — amounts as numerals-on Deepgram might return them (real range 2.2 to 4.2 crore)
+my budget is 1.2 crore                             # take as heard, say where prices start
+my budget is about two                             # ask the unit
+my budget is 40 lakhs                              # far below: confirm once, no unit question
+my budget is 12 crore                              # far above: confirm once
+my budget is 2.5 crore                             # in range: take as heard
+---
+# S6 — are you a bot (zero-tolerance regression)
+are you a bot?
+which company is this?
+goodbye
+---
+# S7 — garbled audio, twice in a row (rule d, call 3)
+the pri of the thr bee ach ke
+so what is the
+mm sector the of and
+---
+# S8 — a caller correction (rule e)
+can I visit on Sunday at eleven?
+no, I said Saturday, not Sunday
+---
+# S9 — "I'm just looking" and needs to link to (rules a, b)
+I'm just looking for now, nothing fixed
+it's for my parents, actually
+---
+# S10 — digits left in the KB outside the five spoken lines (F-g)
+when is possession?
+how far is Cyber City from there?

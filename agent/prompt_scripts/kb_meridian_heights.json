@@ -1,0 +1,87 @@
+{
+    "pricing": {
+        "spoken": "The base price is twelve thousand five hundred rupees per square foot. GST at five percent is extra, and there is an interest-free maintenance security of three lakh rupees.",
+        "ifms_lakhs": 3,
+        "gst_percent": 5,
+        "bsp_per_sqft": 12500
+    },
+    "location": {
+        "city": "Gurugram",
+        "sector": "Sector 79B",
+        "landmark": "Near Southern Peripheral Road (SPR) & NH-8 Junction"
+    },
+    "overview": {
+        "usps": [
+            "3-side open, low-density luxury residences",
+            "Private elevator lobby for every apartment",
+            "Over 80% landscaped green open spaces"
+        ],
+        "spoken": "It is a low-density project of five towers on twelve and a half acres, open on three sides, with a private lift lobby for every apartment and more than eighty percent of the land kept green.",
+        "towers": 5,
+        "total_area_acres": 12.5
+    },
+    "amenities": {
+        "spoken": "There is a forty-five thousand square foot clubhouse with twelve guest rooms, a temperature-controlled infinity pool and two fine-dining restaurants.",
+        "guest_rooms": 12,
+        "swimming_pool": "Temperature-controlled infinity pool",
+        "clubhouse_sqft": 45000,
+        "fine_dining_restaurants": 2
+    },
+    "developer": "Aetheria Realty Group",
+    "fictional": true,
+    "objections": {
+        "price": "What range were you thinking of?",
+        "location": "Sector 79B offers seamless connectivity to both NH-8 and SPR, avoiding central city traffic while keeping Cyber City under 25 minutes away.",
+        "think_about_it": "Of course, take your time and talk it over with your family. If any questions come up, I'm happy to answer them now.",
+        "possession_timeline": "Possession is scheduled for December 2029 (3 years). Foundation work is complete and superstructure construction is moving ahead on schedule."
+    },
+    "unit_types": [
+        {
+            "type": "3 BHK",
+            "spoken": "The three BHK homes are eighteen hundred and fifty to twenty-one hundred and fifty square feet, and they are priced from about two point two crore to two point seven crore.",
+            "sizes_sqft": [
+                1850,
+                2150
+            ],
+            "price_range_cr": {
+                "max": 2.7,
+                "min": 2.2
+            }
+        },
+        {
+            "type": "4 BHK",
+            "spoken": "The four BHK homes are twenty-six hundred to thirty-one hundred square feet, and they are priced from about three point four crore to four point two crore.",
+            "sizes_sqft": [
+                2600,
+                3100
+            ],
+            "price_range_cr": {
+                "max": 4.2,
+                "min": 3.4
+            }
+        }
+    ],
+    "payment_plan": {
+        "name": "Construction Linked Plan",
+        "spoken": "It is a construction linked plan: a quarter at booking, a quarter when the superstructure is done, a quarter when flooring and plaster are done, and the last quarter at possession.",
+        "tranches": [
+            {
+                "percent": 25,
+                "trigger": "Booking Amount"
+            },
+            {
+                "percent": 25,
+                "trigger": "Completion of Superstructure"
+            },
+            {
+                "percent": 25,
+                "trigger": "Completion of Flooring & Plaster"
+            },
+            {
+                "percent": 25,
+                "trigger": "Notice of Possession"
+            }
+        ]
+    },
+    "project_name": "Meridian Heights"
+}
