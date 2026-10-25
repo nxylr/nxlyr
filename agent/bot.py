@@ -76,7 +76,7 @@ from pipecat.processors.aggregators.llm_response_universal import (
 )
 from pipecat.runner.utils import parse_telephony_websocket
 from pipecat.serializers.exotel import ExotelFrameSerializer
-from pipecat.services.deepgram.stt import DeepgramSTTService, DeepgramSTTSettings
+from pipecat.services.deepgram.stt import DeepgramSTTSettings
 # Switched from ElevenLabsTTSService (WebSocket) to ElevenLabsHttpTTSService (HTTP):
 # on this Hetzner/Docker setup the websocket connection went unhealthy after the
 # first turn with no error logged (matches known Pipecat websocket-reconnect
@@ -101,13 +101,16 @@ from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.workers.runner import WorkerRunner
 from pipecat.processors.frame_processor import FrameDirection
 
+from convo_config import log_line, read_convo_config, tags_allowed
 from log_scrub import configure_logging
 from prompt import (
     AI_DISCLOSURE_MODE,
     COMPANY_DISPLAY,
     LEAD_SOURCE_DEMO_FORM,
+    build_greeting,
     build_initial_messages,
 )
+from stt_keyterms import STTCheckingDeepgramService, build_keyterms
 from tools import TOOL_SCHEMAS, CallResources, make_redis_client
 
 # Bare logger.remove() rather than test_pipeline.py's logger.remove(0): this module
@@ -443,15 +446,29 @@ async def run_bot(
     # NOTE: passing language="en-IN" directly as a DeepgramSTTService kwarg is
     # a silent no-op on Pipecat 1.5.0 (it always resolves to Language.EN
     # regardless of the value given) — it must go through settings= instead.
-    stt = DeepgramSTTService(
-        api_key=os.getenv("DEEPGRAM_API_KEY"),
-        settings=DeepgramSTTSettings(
-            model="nova-3",
-            language="en-IN",
-            smart_format=True,
-            interim_results=True,
-            endpointing=300,
-        ),
+    convo_cfg = await read_convo_config()
+    stt_settings = {
+        "model": "nova-3",
+        "language": "en-IN",
+        "smart_format": True,
+        "interim_results": True,
+        "endpointing": 300,
+    }
+    if convo_cfg.stt_keyterms:
+        stt_settings["keyterm"] = build_keyterms(project_kb)
+    if convo_cfg.stt_numerals:
+        stt_settings["numerals"] = True
+    stt_args = {
+        "api_key": os.getenv("DEEPGRAM_API_KEY"),
+        "settings": DeepgramSTTSettings(**stt_settings),
+        "conn_id": conn_id,
+        "region": convo_cfg.stt_region,
+        "project_name": project_kb.get("project_name"),
+    }
+    if convo_cfg.stt_region == "eu":
+        stt_args["base_url"] = "api.eu.deepgram.com"
+    stt = STTCheckingDeepgramService(
+        **stt_args,
     )
 
     llm = OpenAILLMService(
@@ -488,13 +505,38 @@ async def run_bot(
         # handlers() registers them automatically from the context, so there is
         # deliberately no register_function() call here.
         messages = build_initial_messages(
-            project_kb, lead_source=LEAD_SOURCE_DEMO_FORM
+            project_kb,
+            lead_source=LEAD_SOURCE_DEMO_FORM,
+            version=convo_cfg.prompt_version,
         )
-        greeting = messages[-1]["content"]
+        plain_greeting = messages[-1]["content"]
+        tts_model = os.getenv("ELEVENLABS_MODEL", "eleven_turbo_v2")  # 019: replace with voice_cfg.model once 019 has merged
+        greeting_tags_blocked = convo_cfg.greeting_tags and not tags_allowed(tts_model)
+        if greeting_tags_blocked:
+            logger.warning(
+                "greeting_tags is on but the voice model is not v4; using the plain greeting"
+            )
+        greeting = (
+            build_greeting(
+                LEAD_SOURCE_DEMO_FORM,
+                project_kb.get("project_name"),
+                tags=True,
+            )
+            if convo_cfg.greeting_tags and not greeting_tags_blocked
+            else plain_greeting
+        )
         logger.info(
             f"prompt v2: chars={len(messages[0]['content'])} "
             f"lead_source={LEAD_SOURCE_DEMO_FORM} "
-            f"disclosure_mode={AI_DISCLOSURE_MODE} company={COMPANY_DISPLAY}"
+            f"disclosure_mode={AI_DISCLOSURE_MODE} company={COMPANY_DISPLAY} "
+            f"version={convo_cfg.prompt_version}"
+        )
+        logger.info(
+            log_line(
+                convo_cfg,
+                conn_id,
+                greeting_tags_blocked=greeting_tags_blocked,
+            )
         )
         context = LLMContext(messages=messages, tools=TOOL_SCHEMAS)
         models_started_at = monotonic()

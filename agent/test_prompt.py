@@ -436,8 +436,9 @@ class PromptV2Tests(unittest.TestCase):
         self.assertIn("TTSSpeakFrame(greeting, append_to_context=False)", source)
         self.assertRegex(
             source,
-            r"messages = build_initial_messages\(\s*project_kb, "
-            r"lead_source=LEAD_SOURCE_DEMO_FORM\s*\)",
+            r"messages = build_initial_messages\(\s*project_kb,\s*"
+            r"lead_source=LEAD_SOURCE_DEMO_FORM,\s*"
+            r"version=convo_cfg\.prompt_version,?\s*\)",
         )
         self.assertIn("LLMContext(messages=messages, tools=TOOL_SCHEMAS)", source)
         self.assertNotIn("lead_source=LEAD_SOURCE_LEAD", source)

@@ -18,6 +18,7 @@ if str(AGENT_DIR) not in sys.path:
 
 with patch("dotenv.load_dotenv"):
     import bot
+    import convo_config
     import kb_loader
     import log_scrub
     import server
@@ -114,11 +115,15 @@ async def run_bot_until_models_built(blocking_builder) -> None:
                 )
             ),
         ),
-        patch.object(bot, "load_project_kb", return_value={"project_name": "Test"}),
+        patch.multiple(
+            bot,
+            load_project_kb=MagicMock(return_value={"project_name": "Test"}),
+            read_convo_config=AsyncMock(return_value=convo_config.ConvoConfig()),
+        ),
         patch.object(bot, "ExotelFrameSerializer"),
         patch.object(bot, "FastAPIWebsocketParams"),
         patch.object(bot, "FastAPIWebsocketTransport"),
-        patch.object(bot, "DeepgramSTTService"),
+        patch.object(bot, "STTCheckingDeepgramService"),
         patch.object(bot, "OpenAILLMService"),
         patch.object(bot.aiohttp, "ClientSession", Session),
         patch.object(bot, "ElevenLabsHttpTTSService"),
@@ -219,11 +224,15 @@ async def capture_completed_bot_timing_lines() -> list[str]:
                 )
             ),
         ),
-        patch.object(bot, "load_project_kb", return_value={"project_name": "Test"}),
+        patch.multiple(
+            bot,
+            load_project_kb=MagicMock(return_value={"project_name": "Test"}),
+            read_convo_config=AsyncMock(return_value=convo_config.ConvoConfig()),
+        ),
         patch.object(bot, "ExotelFrameSerializer"),
         patch.object(bot, "FastAPIWebsocketParams"),
         patch.object(bot, "FastAPIWebsocketTransport", return_value=transport),
-        patch.object(bot, "DeepgramSTTService"),
+        patch.object(bot, "STTCheckingDeepgramService"),
         patch.object(bot, "OpenAILLMService"),
         patch.object(bot.aiohttp, "ClientSession", FakeClientSession),
         patch.object(bot, "ElevenLabsHttpTTSService"),
