@@ -96,6 +96,7 @@ PY="$MAIN/agent/venv/bin/python"
 "$PY" -m unittest agent.test_kb_loader    # passes since task 015 (F23 fixed); no network
 "$PY" -m unittest agent.test_startup_timing  # call timing log lines, KB preload and refresh, timeouts (task 015); no network
 "$PY" -m unittest agent.test_prompt       # prompt text, greeting, tool strings (task 014); no network
+"$PY" -m unittest agent.test_voice_config # voice config, warm-up and TTS payload fakes (task 019); no network
 # backend import smoke (from agent/ of the worktree)
 (cd agent && "$PY" -c "import server, week2_latency_observer")  # matches Dockerfile
 # No backend Ruff command yet: Ruff has no repository config or declared dependency.

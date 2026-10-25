@@ -83,7 +83,7 @@ from pipecat.services.deepgram.stt import DeepgramSTTSettings
 # issues), silently killing TTS for the rest of the run. HTTP is the Pipecat-docs
 # recommended fallback for "when WebSocket connections are not possible" and our
 # test has no interruption/word-timestamp needs that would require the websocket.
-from pipecat.services.elevenlabs.tts import ElevenLabsHttpTTSService, ElevenLabsHttpTTSSettings
+from pipecat.services.elevenlabs.tts import ElevenLabsHttpTTSService
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.transports.websocket.fastapi import (
     FastAPIWebsocketParams,
@@ -112,6 +112,7 @@ from prompt import (
 )
 from stt_keyterms import STTCheckingDeepgramService, build_keyterms
 from tools import TOOL_SCHEMAS, CallResources, make_redis_client
+from voice_config import log_line as voice_log_line, read_override, resolve, to_settings, tts_filters
 
 # Bare logger.remove() rather than test_pipeline.py's logger.remove(0): this module
 # is imported by a long-lived server, and remove(0) raises if the default handler
@@ -485,6 +486,8 @@ async def run_bot(
     # the duration of this one call, so everything from here through
     # runner.run() lives inside this block.
     async with aiohttp.ClientSession() as session:
+        voice_cfg = resolve(await read_override(), os.environ)
+        logger.info(voice_log_line(voice_cfg, conn_id))
         tts = ElevenLabsHttpTTSService(
             api_key=os.getenv("ELEVENLABS_API_KEY"),
             aiohttp_session=session,
@@ -492,10 +495,8 @@ async def run_bot(
             # 8000 that's pcm_8000, which is exactly what Exotel wants, so the
             # audio leaves ElevenLabs already in the carrier's format.
             sample_rate=EXOTEL_SAMPLE_RATE,
-            settings=ElevenLabsHttpTTSSettings(
-                model=os.getenv("ELEVENLABS_MODEL", "eleven_turbo_v2"),
-                voice=os.getenv("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM"),
-            ),
+            settings=to_settings(voice_cfg),
+            text_filters=tts_filters(voice_cfg),
         )
 
         # tools= goes on the LLMContext, not on OpenAILLMService — that service
@@ -510,7 +511,7 @@ async def run_bot(
             version=convo_cfg.prompt_version,
         )
         plain_greeting = messages[-1]["content"]
-        tts_model = os.getenv("ELEVENLABS_MODEL", "eleven_turbo_v2")  # 019: replace with voice_cfg.model once 019 has merged
+        tts_model = voice_cfg.model
         greeting_tags_blocked = convo_cfg.greeting_tags and not tags_allowed(tts_model)
         if greeting_tags_blocked:
             logger.warning(

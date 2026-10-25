@@ -1,6 +1,6 @@
 # TTS prosody: the HTTP service re-invents intonation for every sentence
 
-- We use `ElevenLabsHttpTTSService`, which makes a separate HTTP request per sentence, so ElevenLabs picks the intonation each time with no memory of the previous sentence. Pipecat's docs recommend the WebSocket service for interactive conversations. ElevenLabs has request stitching (`previous_request_ids`) for exactly this, but Pipecat does not expose it.
+- We use `ElevenLabsHttpTTSService`, which makes a separate HTTP request per sentence. Pipecat 1.5.0 sends `previous_text` on later sentences unless the model is `eleven_v3`, so it does pass some text context. Whether ElevenLabs honours it for our models is unverified. ElevenLabs also has request stitching (`previous_request_ids`), which Pipecat does not expose here.
 - Candidate cause of the random tone between sentences and of call 15's closing line having no falling tone. Needs its own research task and spec.
 - Cautions: the WebSocket service narrows speed to 0.7 to 1.2, and `apply_text_normalization` needs a reconnect. Earlier, the WebSocket service went unhealthy after the first turn on this Hetzner/Docker setup (comment in `agent/bot.py`), which is why HTTP was chosen.
 - Sources (founder research, 2026-10-24; not re-checked by an agent):
