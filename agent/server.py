@@ -96,6 +96,29 @@ async def _refresh_project_kb_forever() -> None:
             )
 
 
+async def _keep_voice_warm_forever(app: FastAPI) -> None:
+    from voice_config import keep_warm_once, read_override, resolve
+
+    while True:
+        interval = 240
+        try:
+            cfg = resolve(await read_override(quiet=True), os.environ)
+            interval = cfg.keepwarm_seconds or 240
+            key = os.getenv("ELEVENLABS_API_KEY")
+            if cfg.keepwarm_seconds and key:
+                ok, result = await keep_warm_once(app.state.session, cfg, key)
+                if ok:
+                    logger.info("voice keep-warm: ok model={} ttfb_ms={}", cfg.model, result)
+        except Exception as error:
+            logger.warning(
+                "voice keep-warm failed status=none error_type={}", type(error).__name__
+            )
+        try:
+            await asyncio.wait_for(asyncio.Event().wait(), timeout=interval)
+        except TimeoutError:
+            pass
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage long-lived resources across the FastAPI app lifecycle.
@@ -122,12 +145,18 @@ async def lifespan(app: FastAPI):
     refresh_task = asyncio.create_task(
         _refresh_project_kb_forever(), name="kb-refresh"
     )
+    keepwarm_task = asyncio.create_task(
+        _keep_voice_warm_forever(app), name="voice-keepwarm"
+    )
     try:
         yield
     finally:
         refresh_task.cancel()
+        keepwarm_task.cancel()
         with suppress(asyncio.CancelledError):
             await refresh_task
+        with suppress(asyncio.CancelledError):
+            await keepwarm_task
         logger.info("Closing shared aiohttp.ClientSession")
         await app.state.session.close()
         redis_client = getattr(app.state, "redis", None)

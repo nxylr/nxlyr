@@ -64,6 +64,7 @@ async def run_wired_bot(
     config: convo_config.ConvoConfig,
     *,
     active_model: str | None = None,
+    voice_override: dict[str, str] | None = None,
 ):
     class FakeTransport:
         def __init__(self) -> None:
@@ -133,6 +134,7 @@ async def run_wired_bot(
         stack.enter_context(patch.object(bot, "FastAPIWebsocketParams"))
         stack.enter_context(patch.object(bot, "FastAPIWebsocketTransport", return_value=transport))
         stack.enter_context(patch.object(bot, "read_convo_config", new=AsyncMock(return_value=config)))
+        stack.enter_context(patch.object(bot, "read_override", new=AsyncMock(return_value=voice_override)))
         stt = stack.enter_context(patch.object(bot, "STTCheckingDeepgramService"))
         stack.enter_context(patch.object(bot, "OpenAILLMService"))
         stack.enter_context(patch.object(bot.aiohttp, "ClientSession", FakeClientSession))
