@@ -10,11 +10,12 @@ Every public claim (site, deck, outreach, prompts) must be traceable to this fil
 - The agent talks about one fictional project (Meridian Heights) using the knowledge base in Supabase.
 - Real phone line via Exotel; real-time voice pipeline (Deepgram, GPT-4o, ElevenLabs).
 
-## Built but not wired to anything
-- Tools `book_site_visit`, `transfer_to_human`, `end_call` set Redis flags only. No calendar, no CRM, no human is notified.
+## Built but only partly wired
+- `end_call` sets a Redis flag only. No calendar, no CRM.
+- `book_site_visit` and `transfer_to_human` (a callback request, not a live transfer) store a `call_commitments` row and send a Telegram alert before the bot says it is done (task 008, live since 2026-10-27; 2 live calls verified, **per the founder, not verified by an agent**).
 
 ## Planned (do not claim as existing)
-- Persisted bookings and commitments ledger (tables exist; code does not write them yet).
+- A calendar entry or CRM update for a booking; the older `commitments` ledger table (nothing writes it; 008 writes `call_commitments`).
 - Transcript storage per call (table exists; not populated by the live agent).
 - Human handoff, CRM update, persona classification, DPDP compliance claims, WhatsApp/brochure sending.
 
