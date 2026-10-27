@@ -1,52 +1,47 @@
 # HOT — read every session (keep < 60 lines)
 
-_Last updated: 2026-10-24 by memory close-out (task 017, closing task 015). Update at the end of every task._
+_Last updated: 2026-10-27 by memory close-out (task 020, closing 018, 019, 008). Update at the end of every task._
 
 ## State
-- Live demo = `main`; last code change 8b21625 (task 015, PR #42); later merges are docs-only but still redeploy. Verify: `git rev-parse --short origin/main`. Public, working.
-- F01 shipped (PR #33): `/ws` admits only calls bound by `/demo/call`. Code default `WS_AUTH_MODE=log`; **per the founder, `enforce` is set in the VPS `.env`** (not verified by an agent).
-- F02 shipped (PR #35): `/demo/call` India-only, consent row before dial, per-number/IP/global caps, kill switch `demo:kill`, overrides in `demo:config`. Details: `log.md`, `docs/issues/003-f02-demo-call-lockdown.md`.
-- 004 (F09 log hygiene, 51b541c) and 011 (F07 turn release, e8998d4, `smart_backstop` 0.8 s) shipped and verified. Numbers: `docs/baselines/2026-10-23-011-exit.md`.
-- **014 prompt v2 shipped as ae2aff2 (PR #40). Exit test 2026-10-24: PARTIAL PASS. Founder decision: not rolled back** (a revert would bring back end-after-booking, invented names and the AI denial). Full figures: `log.md`.
-  - Passed: `TOOL end_call` 0 across Part A, all 10 keys `end_call_tool_invoked=false`; call 15 exactly 1 `end_call`, closing phrase once; 10 distinct `book_site_visit` sids; silent, "are you a bot", "which company" calls clean (no denial, no second greeting, no invented name); leak gates all 0; 0 of 109 turns stalled.
-  - Missed: natural by ear 5 to 6 of 10 (bar 7); LLM first token p50 726 ms (gate 716); first-sentence wait p50 145 ms (gate 84); call 3 re-introduced itself mid-call ("hi my name is Aarya"), a zero-tolerance miss. No latency rerun (hypothesis in the inbox).
-  - A transfer key showed `transfer_requested` blank although the tool fired: flag unreliability, 008's job.
-- **015 L1 start-up shipped as 8b21625 (PR #42). Exit test 2026-10-24: PASS** (founder, 3 silent calls, T0 2026-10-24T16:01:32Z; reported, not run by an agent). Server `ws_connected` to `first_bot_audio_sent` 1,168 / 856 / 457 ms (gate 1,500). Stopwatch pickup to first word 4.3 / 4.2 / 3.89 s (6.5 s on a cold call before 015), so 3.1 to 3.4 s is outside our server (Exotel bridging, phone network; by subtraction, split unmeasured). `kb_source=cache`, `kb_ms=0` on all three; `models_ms` 111 / 102 / 98, under 150, so the model-preload follow-up is closed. Leak gates 0; the `last6` digits are per the founder, being confirmed. Figures: `log.md`.
-- Decisions: AI disclosure `on_ask` for the demo; company spoken as "Next Layer"; payment plan said as a sentence (`decisions.md`).
-- KB `UPDATE`s run 2026-10-23 by the founder in the Supabase SQL Editor, before the 014 merge (verified: whole config read back with `jsonb_pretty`, pricing untouched). `payment_plan.name` is now "Construction Linked Plan" with a `spoken` key and the four tranches unchanged; `objections.think_about_it` and `objections.price` replaced. The leftover-promise check (widened regex) returned 0 rows. The SQL was first tested on a scratch Postgres 16 (guards matched, a second run changed nothing, both rollbacks restored the originals). F05's KB half is therefore done.
-- Payment plan said as a sentence (pass bar 4): no miss reported across the 10 Part A calls; not scored call by call, so this rests on the founder's notes rather than a per-call tally.
-- The live site on `main` still has the F10 overclaims; F04, F05, F10, F11 are open. PRs #29–#31 closed unmerged, branches kept.
-- Outreach to leads stays paused until the truthful tools, do-not-call and consent work (008, 006, 007) are live; demos that prospects call themselves are fine.
-- Merge = deploy. Pushing `main` auto-deploys backend (deploy.yml, no path filter: a docs-only merge rebuilt the image and recreated the container, observed on PR #41) and frontend (Vercel). The first call after any merge or container recreate is cold (slow greeting): do not compare it with the rest of a batch.
-- Schema: `commitments` + `consents` tables exist in prod (migration file not yet committed to repo).
+- Live demo = `main`, last code change 2eed24e (PR #46, task 008). Verify: `git rev-parse --short origin/main`. Merges since 015: 018 67e3466 (25 Oct), 019 d9a23f3 (26 Oct), 008 2eed24e (27 Oct). Merge = redeploy.
+- Earlier, shipped: F01 `/ws` binding (PR #33; `enforce` in the VPS `.env` **per the founder, not verified by an agent**), F02 `/demo/call` lockdown (PR #35, kill switch `demo:kill`), 004 log hygiene, 011 turn release, 014 prompt v2 (PARTIAL PASS, not rolled back), 015 start-up (PASS). Figures: `log.md`.
+- **The three exit results below are per the founder, not verified by an agent.**
+- **018 conversation v2.1 (67e3466): PASS.** EU Deepgram endpoint: speech recognition about 275 ms per turn against about 360 (2 EU calls, 14 global, ranges did not overlap). Key terms: project-name near-misses 0 of 6 calls against 6 of 10. First-sentence wait p50 under 100 ms on every v2.1 block. Numerals redundant (Deepgram formatting already gives digits); Part B skipped. Harness: `claimed_without_tool` 0, `ending_in_question` 59 of 115.
+- **019 voice config (d9a23f3): PASS.** Calls without an override unchanged; keep-warm running. v4 probe: v4 accepts `previous_text`, stability, similarity, style, speed and speaker boost, and rejects `optimize_streaming_latency` with 400 `unsupported_model` (019 drops that on v4). A 200 means accepted or ignored, not used; ElevenLabs says style and speed are not available on v4, so the code's drop of them is correct (inbox `2026-10-27-v4-probe-200-is-accepted-or-ignored.md`).
+- **008 truthful tools (2eed24e): PASS.** 2 live calls: booking, correction (one live row, one superseded, both alerted), refusals, callback request, goodbye verified; 0 failed writes; leak counts 0. A booking or callback is reported only after a `call_commitments` row is stored and a Telegram alert is delivered.
+- **Live Redis settings (per the founder, not verified):** `convo:config` prompt_version=v21 stt_keyterms=on stt_region=eu greeting_tags=on. `voice:config` model=eleven_v4_turbo (voice from env, GQrVSQduiFCVTMHGavV5); `convo:config` greeting_tags=on (voice chosen after live calls on 27 Oct). Code defaults are unchanged (v2, no key terms, global host, plain greeting, current voice); `DEL convo:config` / `DEL voice:config` revert a call to them. See `architecture.md`.
+- Founder decision 2026-10-27: the beachhead is Gurugram residential developers (`decisions.md`).
+- Decisions in force: AI disclosure `on_ask`; company spoken "Next Layer"; payment plan said as a sentence.
+- KB `UPDATE`s run 2026-10-23 by the founder (`payment_plan.spoken`, two objections). The rest of the KB still holds digits (inbox).
+- The live site on `main` still has the F10 overclaims; F05, F10, F11 are open (F04 closed by 008). PRs #29–#31 closed unmerged, branches kept.
+- Outreach to leads stays paused until do-not-call and consent work (006, 007) is live; the truthful tools (008) are now live. Demos that prospects call themselves are fine.
+- Merge = deploy. `deploy.yml` has no path filter: a docs-only merge rebuilt the image and recreated the container (PR #41). The first call after any merge is cold: do not compare it with the rest of a batch.
+- Production `LOG_LEVEL` is DEBUG (unset in the VPS `.env`) until the founder sets INFO; unset, never empty (empty crashes boot).
+- Schema: `commitments`, `consents` and `call_commitments` exist in prod. `call_commitments` is recorded in `supabase/migrations/20261025000000_create_call_commitments.sql`; the migration file for the other two is not yet in the repo.
 
 ## In flight
-- Worktree `005-docs-specs-research` is open. Cap is 3 open worktrees.
+- Task 020 (this memory close-out). No other worktree is open. Cap is 3.
 
-## Next
-1. Prompt v2.1 (inbox `2026-10-24-prompt-v2-1-over-corrected-into-terseness.md`): allow connectives and process phrases, keep content-free acknowledgements banned, fix the mid-call re-greeting and "Hi Aarya". Re-test latency in the same run.
-2. KB rewrite as spoken sentences (digits in pricing, sizes, amenities; real competitor names): SQL only, founder runs it.
-3. Backchannel versus barge-in (`bot.py:207-210`): an agreeing "haan" or fan noise cuts the bot dead.
-4. TTS prosody: research task on ElevenLabs WebSocket versus HTTP; voice settings need the Flash A/B first (inbox).
-5. Start-up levers left: keep-warm for the ElevenLabs voice (a cold voice costs about 640 ms, the largest lever we control); Exotel's 3.1 to 3.4 s (inbox); the dial tone before the greeting (cause unknown).
-6. 012: caller name and form of address.
-7. 008: truthful tools (write `commitments` rows, real tool results, reliable flags, notification).
-8. STT A/B: amounts, and project names as Deepgram key terms.
-9. Do-not-call.
-10. Close 005; three-layer split plan (founder reviewing).
+## Next (Gurugram plan)
+1. Truthful landing page (remove the F10 overclaims; claims only from `product.md`).
+2. Demo funnel alerts on Telegram (who filled the form, who answered, who booked).
+3. Demo hygiene: `deploy.yml` path filter (inbox), a test allowlist for the founder's number, `LOG_LEVEL=INFO`.
+4. Prospect demo kit: one project sheet per prospect, reached by a link.
+5. Call transcripts and a post-call summary.
+6. Cost per call.
 
 ## Backlog (unordered)
-`/start` unauthenticated; `WS_AUTH_MODE` code default to `enforce`; VPS reboot window; Docker log rotation; GitHub branch protection; `new-task.sh`/`finish-task.sh` worktree footgun; F02 test gaps and cooldown UX candidate; promote F02 guard into `architecture.md`; `deploy.yml` path filter (inbox); KB refresh debts (no overall deadline, no stale alert).
+KB rewrite as spoken sentences (SQL, founder runs); backchannel versus barge-in (`bot.py`); TTS prosody research (inbox); Exotel's 3.1 to 3.4 s and the dial tone before the greeting; 012 caller name; do-not-call (006, 007); close 005 and the three-layer split plan; second LLM call on successful tool turns (inbox, option C); `/start` unauthenticated; `WS_AUTH_MODE` code default to `enforce`; VPS reboot window; Docker log rotation; GitHub branch protection; `new-task.sh`/`finish-task.sh` worktree footgun; F02 test gaps and cooldown UX; KB refresh debts.
 
 ## Human-only pending
-- Send Exotel email (DND / 140xx question) and the start-up questions (inbox `2026-10-24-ask-exotel-why-pickup-takes-3s.md`). Lawyer's answer on TRAI and DPDP (AI disclosure).
-- Commit migration file `20261007000000_phase0_commitments_consents.sql`.
-- Enable GitHub branch protection on `main` if plan allows.
-- Check on the VPS what a `.env` edit does to redis state (`docs/memory/inbox/2026-10-13-env-edit-recreates-redis.md`).
+- Set `LOG_LEVEL=INFO` on the VPS.
+- Send the Exotel email (DND / 140xx and the start-up questions); lawyer's answer on TRAI and DPDP (AI disclosure).
+- Commit migration file `20261007000000_phase0_commitments_consents.sql`. Enable branch protection if the plan allows.
+- Check what a `.env` edit does to redis state (inbox `2026-10-13-env-edit-recreates-redis.md`).
 
 ## Do not forget
 - Never `SELECT *` on `tenants`. Agents never merge. Container logs are scrubbed since 004, but uvicorn's own lines are not: never paste logs unredacted.
 - Exit-test greps for `TOOL …` and `prompt v2:` read `docker logs nxlyr_agent`, not `events.log` (latency lines only).
-- Don't edit the VPS `.env` while calls are in flight (it recreates redis).
+- Don't edit the VPS `.env` while calls are in flight (it recreates redis). Switches in Redis (`convo:config`, `voice:config`) need no deploy.
 - Demo emergency stop, no deploy: `docker compose exec -T redis redis-cli SET demo:kill 1` (clear with `DEL demo:kill`).
 - Latency files live in the container and are lost on every deploy: copy them off before deploying.
