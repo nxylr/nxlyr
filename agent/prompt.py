@@ -1,6 +1,8 @@
 import json
 from datetime import date
 
+from commitments import now_ist
+
 
 AGENT_NAME = "Aarya"
 COMPANY_DISPLAY = "NXLYR"
@@ -48,8 +50,8 @@ END_CALL_RULE = (
     "latest message already said goodbye. If unsure, stay on the line."
 )
 TRANSFER_TO_HUMAN_RULE = (
-    "- transfer_to_human only logs a request. It connects nobody and schedules "
-    "nothing: say a colleague will follow up, with no time."
+    "- transfer_to_human passes your question to a colleague by message. It connects "
+    "nobody. Say only what its result tells you, with no time."
 )
 
 
@@ -305,7 +307,7 @@ def build_system_prompt(
     today: date | None = None,
     version: str = "v2",
 ) -> str:
-    today = today or date.today()
+    today = today or now_ist().date()
     project_name, company_context, disclosure, kb_block = _prompt_context(
         project_kb=project_kb,
         lead_source=lead_source,

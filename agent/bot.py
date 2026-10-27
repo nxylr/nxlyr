@@ -111,6 +111,8 @@ from prompt import (
     build_initial_messages,
 )
 from stt_keyterms import STTCheckingDeepgramService, build_keyterms
+from commitments import PROJECT_SLUG as KB_PROJECT_SLUG
+from commitments import phone_last_four, pick_lead_phone
 from tools import TOOL_SCHEMAS, CallResources, make_redis_client
 from voice_config import log_line as voice_log_line, read_override, resolve, to_settings, tts_filters
 
@@ -291,9 +293,6 @@ LLM_TEMPERATURE = 0.75
 
 # The tenant this bot serves. Single-project for now (Week 4 scope); becomes
 # a per-call parameter once server.py routes more than one tenant.
-KB_PROJECT_SLUG = "nxlyr-demo"
-
-
 def load_project_kb() -> dict:
     """Load the real project KB from Supabase (agent/kb_loader.py, Task 3.1).
 
@@ -389,6 +388,29 @@ async def run_bot(
 
     stream_sid = call_data.stream_id
     call_sid = call_data.call_id
+    lead_phone, lead_field, phone_reason = pick_lead_phone(
+        call_data, os.getenv("EXOTEL_PHONE_NUMBER")
+    )
+    http_session = getattr(
+        getattr(getattr(websocket, "app", None), "state", None), "session", None
+    )
+    if lead_phone:
+        logger.info(
+            "exotel parties call_sid={} from_last4={} to_last4={} chosen={} reason={} http_session={}",
+            call_sid,
+            phone_last_four(getattr(call_data, "from_number", "")),
+            phone_last_four(getattr(call_data, "to_number", "")),
+            lead_field,
+            phone_reason,
+            "present" if http_session is not None else "missing",
+        )
+    else:
+        logger.info(
+            "exotel parties call_sid={} chosen=none reason={} http_session={}",
+            call_sid,
+            phone_reason,
+            "present" if http_session is not None else "missing",
+        )
     if not stream_sid:
         raise RuntimeError("Exotel start event carried no stream_sid")
 
@@ -598,7 +620,12 @@ async def run_bot(
         redis_started_at = monotonic()
         redis_client = await make_redis_client()
         redis_ms = max(0, int((monotonic() - redis_started_at) * 1000))
-        call_resources = CallResources(call_sid=call_sid, redis=redis_client)
+        call_resources = CallResources(
+            call_sid=call_sid,
+            redis=redis_client,
+            http_session=http_session,
+            lead_phone=lead_phone,
+        )
 
         _call_timing(
             "setup_done",
@@ -672,7 +699,7 @@ async def run_bot(
             # The session hash itself is left in Redis on purpose — Flow 3's
             # post-call webhook is what reads end_call_tool_invoked, and it
             # fires after this coroutine is gone. The 4h EXPIRE that
-            # tools._set_session_flag arms is what cleans it up.
+            # tools._set_session_flags arms is what cleans it up.
             if redis_client is not None:
                 await redis_client.aclose()
 

@@ -36,10 +36,14 @@ def scrub(text: str) -> str:
 
 
 def drop_prompt_debug(record: dict) -> bool:
-    """Drop OpenAI context dumps while retaining warnings and other DEBUG logs."""
+    """Drop DEBUG records that carry prompts or raw function arguments."""
+    if record["level"].no >= 20:
+        return True
+    if record["name"] == "pipecat.services.openai.base_llm":
+        return False
     return not (
-        record["level"].no < 20
-        and record["name"] == "pipecat.services.openai.base_llm"
+        record["name"] == "pipecat.services.llm_service"
+        and "with arguments" in record["message"]
     )
 
 

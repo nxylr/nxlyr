@@ -335,6 +335,22 @@ assert os.environ[\"FAKE_API_TOKEN\"] in output.getvalue()
         self.assertIn("WARNING-MARKER", output)
         self.assertIn("OTHER-DEBUG-MARKER", output)
 
+    def test_t5b_function_call_arguments_are_dropped_by_the_real_sink(self):
+        name = "Caller Name Marker"
+        phone = "98765 43210"
+        note = "private-note-marker"
+        source = (
+            "logger.debug(\"Calling function [book_site_visit:id] with arguments {}\", "
+            f"{{'name': {name!r}, 'phone': {phone!r}, 'notes': {note!r}}})"
+        )
+        exec(
+            compile(source, "pipecat_llm_service.py", "exec"),
+            {"logger": logger, "__name__": "pipecat.services.llm_service"},
+        )
+        output = self.text()
+        for private in (name, phone, note):
+            self.assertNotIn(private, output)
+
     def test_t6_exception_messages_and_secret_shapes_are_scrubbed(self):
         token = "FAKE-API-TOKEN-12345678"
         jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3OCJ9.signaturepart"
