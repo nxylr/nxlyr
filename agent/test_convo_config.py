@@ -30,6 +30,7 @@ DEFAULTS = {
     "stt_numerals": False,
     "stt_region": "global",
     "greeting_tags": False,
+    "bargein_mode": "legacy",
 }
 
 
@@ -102,6 +103,11 @@ async def run_wired_bot(
 
     transport = FakeTransport()
     worker_box = {}
+    builder_context = []
+
+    def build_user_params():
+        builder_context.append(bot._BARGEIN_BUILD_CONTEXT.get())
+        return object()
 
     def make_worker(*args, **kwargs):
         worker = FakeWorker(*args, **kwargs)
@@ -131,6 +137,9 @@ async def run_wired_bot(
         ))
         stack.enter_context(patch.object(bot, "load_project_kb", return_value={"project_name": "Test Heights"}))
         stack.enter_context(patch.object(bot, "ExotelFrameSerializer"))
+        serializer_builder = stack.enter_context(
+            patch.object(bot, "_build_exotel_serializer", return_value=object())
+        )
         stack.enter_context(patch.object(bot, "FastAPIWebsocketParams"))
         stack.enter_context(patch.object(bot, "FastAPIWebsocketTransport", return_value=transport))
         stack.enter_context(patch.object(bot, "read_convo_config", new=AsyncMock(return_value=config)))
@@ -141,8 +150,11 @@ async def run_wired_bot(
         stack.enter_context(patch.object(bot, "ElevenLabsHttpTTSService"))
         messages = stack.enter_context(patch.object(bot, "build_initial_messages", wraps=bot.build_initial_messages))
         context = stack.enter_context(patch.object(bot, "LLMContext"))
-        stack.enter_context(patch.object(bot, "_build_user_aggregator_params", return_value=object()))
+        stack.enter_context(
+            patch.object(bot, "_build_user_aggregator_params", side_effect=build_user_params)
+        )
         stack.enter_context(patch.object(bot, "LLMContextAggregatorPair", return_value=FakeAggregator()))
+        observer = stack.enter_context(patch.object(bot, "BargeInObserver"))
         stack.enter_context(patch.object(bot, "Pipeline"))
         stack.enter_context(patch.object(bot, "PipelineParams"))
         stack.enter_context(patch.object(bot, "PipelineWorker", side_effect=make_worker))
@@ -162,6 +174,9 @@ async def run_wired_bot(
         info=info,
         warning=warning,
         tag_guard=tag_guard,
+        serializer_builder=serializer_builder,
+        builder_context=builder_context,
+        observer=observer,
     )
 
 
@@ -185,6 +200,7 @@ class ConvoConfigTests(unittest.IsolatedAsyncioTestCase):
             "stt_numerals": "on",
             "stt_region": " EU ",
             "greeting_tags": "On",
+            "bargein_mode": " SMART ",
         }
         config = convo_config.parse(raw)
         self.assertEqual(config.prompt_version, "v21")
@@ -192,6 +208,7 @@ class ConvoConfigTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(config.stt_numerals)
         self.assertEqual(config.stt_region, "eu")
         self.assertTrue(config.greeting_tags)
+        self.assertEqual(config.bargein_mode, "smart")
         self.assertEqual(config.overrides, tuple(raw))
 
     async def test_c03_invalid_values_warn_once_and_fall_back_without_echoing_long_input(self) -> None:
@@ -201,6 +218,7 @@ class ConvoConfigTests(unittest.IsolatedAsyncioTestCase):
             "stt_numerals": ("yes", ""),
             "stt_region": ("EU-west", ""),
             "greeting_tags": ("yes", ""),
+            "bargein_mode": ("new", ""),
         }
         for field, values in cases.items():
             for value in values:
@@ -294,7 +312,7 @@ class ConvoConfigTests(unittest.IsolatedAsyncioTestCase):
             line,
             r"^convo config: conn=(?:[0-9a-f]{6}|-) prompt_version=\S+ "
             r"stt_keyterms=\S+ stt_numerals=\S+ stt_region=\S+ "
-            r"greeting_tags=\S+ read_ms=\d+ overrides=\S+$",
+            r"greeting_tags=\S+ bargein_mode=\S+ read_ms=\d+ overrides=\S+$",
         )
         self.assertNotIn(secret_url, line)
         self.assertNotIn(secret_key, line)
@@ -394,6 +412,16 @@ class ConvoConfigTests(unittest.IsolatedAsyncioTestCase):
         result = await run_wired_bot(convo_config.ConvoConfig())
         lines = [str(call.args[0]) for call in result.info.call_args_list]
         self.assertEqual(sum(line.startswith("convo config:") for line in lines), 1)
+
+    async def test_g06_run_bot_propagates_smart_bargein_state_everywhere(self) -> None:
+        result = await run_wired_bot(convo_config.parse({"bargein_mode": "smart"}))
+        serializer_kwargs = result.serializer_builder.call_args.kwargs
+        self.assertEqual(serializer_kwargs["bargein_mode"], "smart")
+        trace = serializer_kwargs["trace"]
+        self.assertEqual(trace.mode, "smart")
+        self.assertEqual(result.builder_context, [("smart", trace)])
+        result.observer.assert_called_once()
+        self.assertIs(result.observer.call_args.kwargs["trace"], trace)
 
 
 if __name__ == "__main__":

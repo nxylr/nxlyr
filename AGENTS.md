@@ -92,12 +92,14 @@ Agents have no memory between sessions. Read these at session start, in order:
 MAIN="$(cd "$(git rev-parse --git-common-dir)/.." && pwd)"
 PY="$MAIN/agent/venv/bin/python"
 # backend unit tests (from the repository/worktree root)
-# All 13 test modules in one run: 194 tests, OK on 2026-10-27 (task 020); no network, no live service.
+# All 14 test modules in one run: 227 tests, OK on 2026-11-02 (task 022); no network, no live service.
 # ws_auth (F01), kb_loader, startup_timing (015), prompt (014), voice_config (019), convo_config, stt_keyterms,
-# prompt_v21, prompt_harness (018), tools (008), demo_guard (F02), log_hygiene (004), turn_release (011)
+# prompt_v21, prompt_harness (018), tools (008), demo_guard (F02), log_hygiene (004), turn_release (011),
+# bargein (022)
 "$PY" -m unittest agent.test_ws_auth agent.test_kb_loader agent.test_startup_timing agent.test_prompt \
   agent.test_voice_config agent.test_convo_config agent.test_stt_keyterms agent.test_prompt_v21 \
-  agent.test_prompt_harness agent.test_tools agent.test_demo_guard agent.test_log_hygiene agent.test_turn_release
+  agent.test_prompt_harness agent.test_tools agent.test_demo_guard agent.test_log_hygiene agent.test_turn_release \
+  agent.test_bargein
 # agent/test_pipeline.py is a microphone smoke script, not a unit test: do not add it to the list.
 # backend import smoke (from agent/ of the worktree)
 (cd agent && "$PY" -c "import server, week2_latency_observer")  # matches Dockerfile
