@@ -77,7 +77,6 @@ from pipecat.processors.aggregators.llm_response_universal import (
 )
 from pipecat.runner.utils import parse_telephony_websocket
 from pipecat.serializers.exotel import ExotelFrameSerializer
-from pipecat.services.deepgram.stt import DeepgramSTTSettings
 # Switched from ElevenLabsTTSService (WebSocket) to ElevenLabsHttpTTSService (HTTP):
 # on this Hetzner/Docker setup the websocket connection went unhealthy after the
 # first turn with no error logged (matches known Pipecat websocket-reconnect
@@ -118,7 +117,7 @@ from prompt import (
     build_greeting,
     build_initial_messages,
 )
-from stt_keyterms import STTCheckingDeepgramService, build_keyterms
+from stt_keyterms import STTCheckingDeepgramService, build_stt_settings
 from commitments import PROJECT_SLUG as KB_PROJECT_SLUG
 from commitments import phone_last_four, pick_lead_phone
 from tools import TOOL_SCHEMAS, CallResources, make_redis_client
@@ -526,23 +525,18 @@ async def run_bot(
     # NOTE: passing language="en-IN" directly as a DeepgramSTTService kwarg is
     # a silent no-op on Pipecat 1.5.0 (it always resolves to Language.EN
     # regardless of the value given) — it must go through settings= instead.
-    stt_settings = {
-        "model": "nova-3",
-        "language": "en-IN",
-        "smart_format": True,
-        "interim_results": True,
-        "endpointing": 300,
-    }
-    if convo_cfg.stt_keyterms:
-        stt_settings["keyterm"] = build_keyterms(project_kb)
-    if convo_cfg.stt_numerals:
-        stt_settings["numerals"] = True
     stt_args = {
         "api_key": os.getenv("DEEPGRAM_API_KEY"),
-        "settings": DeepgramSTTSettings(**stt_settings),
+        "settings": build_stt_settings(
+            project_kb,
+            language_mode=convo_cfg.language_mode,
+            keyterms=convo_cfg.stt_keyterms,
+            numerals=convo_cfg.stt_numerals,
+        ),
         "conn_id": conn_id,
         "region": convo_cfg.stt_region,
         "project_name": project_kb.get("project_name"),
+        "hinglish": convo_cfg.language_mode == "hinglish",
     }
     if convo_cfg.stt_region == "eu":
         stt_args["base_url"] = "api.eu.deepgram.com"
@@ -583,11 +577,19 @@ async def run_bot(
         # carries its own handler, and LLMService._register_advertised_tool_
         # handlers() registers them automatically from the context, so there is
         # deliberately no register_function() call here.
-        messages = build_initial_messages(
-            project_kb,
-            lead_source=LEAD_SOURCE_DEMO_FORM,
-            version=convo_cfg.prompt_version,
-        )
+        if convo_cfg.language_mode == "hinglish":
+            messages = build_initial_messages(
+                project_kb,
+                lead_source=LEAD_SOURCE_DEMO_FORM,
+                version=convo_cfg.prompt_version,
+                language_mode="hinglish",
+            )
+        else:
+            messages = build_initial_messages(
+                project_kb,
+                lead_source=LEAD_SOURCE_DEMO_FORM,
+                version=convo_cfg.prompt_version,
+            )
         plain_greeting = messages[-1]["content"]
         tts_model = voice_cfg.model
         greeting_tags_blocked = convo_cfg.greeting_tags and not tags_allowed(tts_model)
@@ -608,7 +610,8 @@ async def run_bot(
             f"prompt v2: chars={len(messages[0]['content'])} "
             f"lead_source={LEAD_SOURCE_DEMO_FORM} "
             f"disclosure_mode={AI_DISCLOSURE_MODE} company={COMPANY_DISPLAY} "
-            f"version={convo_cfg.prompt_version}"
+            f"version={convo_cfg.prompt_version} "
+            f"language_mode={convo_cfg.language_mode}"
         )
         logger.info(
             log_line(
