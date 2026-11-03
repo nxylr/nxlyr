@@ -46,6 +46,7 @@ Requires environment variables (see .env.template):
 import asyncio
 import math
 import os
+from contextvars import ContextVar
 from dataclasses import dataclass
 from time import monotonic
 from typing import Callable, Mapping
@@ -101,6 +102,13 @@ from pipecat.workers.runner import WorkerRunner
 from pipecat.processors.frame_processor import FrameDirection
 
 from convo_config import log_line, read_convo_config, tags_allowed
+from bargein import (
+    SMART_VAD_PARAMS,
+    BargeInObserver,
+    BargeInTrace,
+    DualKeyExotelSerializer,
+    SmartBargeInStartStrategy,
+)
 from log_scrub import configure_logging
 from prompt import (
     AI_DISCLOSURE_MODE,
@@ -194,6 +202,8 @@ logger.info(
 def build_user_turn_strategies(
     config: TurnReleaseConfig = TURN_RELEASE_CONFIG,
     *,
+    bargein_mode: str = "legacy",
+    trace: BargeInTrace | None = None,
     turn_analyzer_factory: Callable[[SmartTurnParams], object] | None = None,
     smart_turn_guard_secs: float = SMART_TURN_GUARD_SECS,
 ) -> UserTurnStrategies:
@@ -217,10 +227,17 @@ def build_user_turn_strategies(
     # Both strategies are enabled: VAD is the fast path, and
     # transcription is the fallback for a caller too quiet to trip
     # VAD but still transcribed by Deepgram.
-    start = [
-        VADUserTurnStartStrategy(enable_interruptions=True),
-        TranscriptionUserTurnStartStrategy(enable_interruptions=True),
-    ]
+    if bargein_mode == "smart":
+        start = [
+            SmartBargeInStartStrategy(
+                trace=trace or BargeInTrace(mode="smart", conn_id=None)
+            )
+        ]
+    else:
+        start = [
+            VADUserTurnStartStrategy(enable_interruptions=True),
+            TranscriptionUserTurnStartStrategy(enable_interruptions=True),
+        ]
 
     if config.mode == SPEECH_TIMEOUT_MODE:
         return UserTurnStrategies(
@@ -260,11 +277,22 @@ def build_user_turn_strategies(
 
 def _build_user_aggregator_params(
     user_turn_strategies: UserTurnStrategies | None = None,
+    *,
+    bargein_mode: str = "legacy",
+    trace: BargeInTrace | None = None,
 ) -> LLMUserAggregatorParams:
     """Keep the production VAD and turn-strategy wiring directly testable."""
+    call_context = _BARGEIN_BUILD_CONTEXT.get()
+    if call_context and bargein_mode == "legacy" and trace is None:
+        bargein_mode, trace = call_context
     return LLMUserAggregatorParams(
-        vad_analyzer=SileroVADAnalyzer(),
-        user_turn_strategies=user_turn_strategies or build_user_turn_strategies(),
+        vad_analyzer=(
+            SileroVADAnalyzer(params=SMART_VAD_PARAMS)
+            if bargein_mode == "smart"
+            else SileroVADAnalyzer()
+        ),
+        user_turn_strategies=user_turn_strategies
+        or build_user_turn_strategies(bargein_mode=bargein_mode, trace=trace),
     )
 
 # Exotel streams 8 kHz 16-bit signed little-endian mono PCM ("raw/slin"),
@@ -273,6 +301,34 @@ def _build_user_aggregator_params(
 # Everything downstream is pinned to the same rate so no resampling happens
 # between us and the carrier.
 EXOTEL_SAMPLE_RATE = 8000
+_BARGEIN_BUILD_CONTEXT: ContextVar[tuple[str, BargeInTrace] | None] = ContextVar(
+    "bargein_build_context", default=None
+)
+
+
+def _build_exotel_serializer(
+    *,
+    stream_sid: str,
+    call_sid: str | None,
+    bargein_mode: str,
+    trace: BargeInTrace,
+):
+    params = ExotelFrameSerializer.InputParams(
+        exotel_sample_rate=EXOTEL_SAMPLE_RATE,
+        sample_rate=None,
+    )
+    if bargein_mode == "smart":
+        return DualKeyExotelSerializer(
+            stream_sid=stream_sid,
+            call_sid=call_sid,
+            params=params,
+            trace=trace,
+        )
+    return ExotelFrameSerializer(
+        stream_sid=stream_sid,
+        call_sid=call_sid,
+        params=params,
+    )
 
 
 def check_env():
@@ -438,15 +494,16 @@ async def run_bot(
         raise
     kb_ms = max(0, int((monotonic() - kb_started_at) * 1000))
 
-    serializer = ExotelFrameSerializer(
+    convo_cfg = await read_convo_config()
+    bargein_trace = BargeInTrace(
+        mode=convo_cfg.bargein_mode,
+        conn_id=conn_id,
+    )
+    serializer = _build_exotel_serializer(
         stream_sid=stream_sid,
         call_sid=call_sid,
-        params=ExotelFrameSerializer.InputParams(
-            exotel_sample_rate=EXOTEL_SAMPLE_RATE,
-            # None means "follow the pipeline's rate" — which we also pin to 8000
-            # below, so this stays a straight pass-through.
-            sample_rate=None,
-        ),
+        bargein_mode=convo_cfg.bargein_mode,
+        trace=bargein_trace,
     )
 
     transport = FastAPIWebsocketTransport(
@@ -468,7 +525,6 @@ async def run_bot(
     # NOTE: passing language="en-IN" directly as a DeepgramSTTService kwarg is
     # a silent no-op on Pipecat 1.5.0 (it always resolves to Language.EN
     # regardless of the value given) — it must go through settings= instead.
-    convo_cfg = await read_convo_config()
     stt_args = {
         "api_key": os.getenv("DEEPGRAM_API_KEY"),
         "settings": build_stt_settings(
@@ -566,7 +622,13 @@ async def run_bot(
         )
         context = LLMContext(messages=messages, tools=TOOL_SCHEMAS)
         models_started_at = monotonic()
-        user_params = await asyncio.to_thread(_build_user_aggregator_params)
+        build_context_token = _BARGEIN_BUILD_CONTEXT.set(
+            (convo_cfg.bargein_mode, bargein_trace)
+        )
+        try:
+            user_params = await asyncio.to_thread(_build_user_aggregator_params)
+        finally:
+            _BARGEIN_BUILD_CONTEXT.reset(build_context_token)
         models_ms = max(0, int((monotonic() - models_started_at) * 1000))
         _call_timing(
             "models_built",
@@ -578,23 +640,32 @@ async def run_bot(
             context,
             user_params=user_params,
         )
+        user_aggregator = context_aggregator.user()
+        assistant_aggregator = context_aggregator.assistant()
+        transport_output = transport.output()
 
         pipeline = Pipeline(
             [
                 transport.input(),
                 stt,
-                context_aggregator.user(),
+                user_aggregator,
                 llm,
                 tts,
-                transport.output(),
-                context_aggregator.assistant(),
+                transport_output,
+                assistant_aggregator,
             ]
         )
 
         # The Week 2 latency harness appends to a single fixed CSV, which two
         # concurrent calls would interleave into nonsense — so it's opt-in here
         # rather than always-on the way it was in test_pipeline.py.
-        observers = []
+        observers = [
+            BargeInObserver(
+                trace=bargein_trace,
+                user_aggregator=user_aggregator,
+                output_processor=transport_output,
+            )
+        ]
         if ws_connected_at is not None and conn_id is not None:
             observers.append(
                 CallTimingObserver(
