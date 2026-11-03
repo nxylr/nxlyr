@@ -343,7 +343,7 @@ Tags: 🧑 YOU, 🤖 AGENT, 👀 VERIFY. No agent SSHes, merges, or handles a ke
 7. 🧑 Per call, one scoring row: understood (Y/N per turn), mix right (Y/N), figures right (Y/N), voice natural by ear (1 to 10), anything odd (a Hindi word read oddly, a Latin word mangled, a long pause).
 8. 🧑 Evidence (copy `docker logs` output off the VPS only after checking for secrets; the log is scrubbed since 004, uvicorn's own lines are not):
    ```
-   docker logs nxlyr_agent --since "$T0" 2>&1 | grep -E "convo config:|stt endpoint:|stt check:|TOOL |prompt v2:" > ~/021-lines.txt
+   docker logs nxlyr_agent --since "$T0" 2>&1 | grep -E "convo config:|stt endpoint:|stt check:|Connection lost|stt fallback:|TOOL |prompt v2:" > ~/021-lines.txt
    ```
    👀 Expect per hinglish call: `convo config: ... language_mode=hinglish`, `stt endpoint: ... language=multi host=api.eu.deepgram.com` (or the host the probe chose), `stt check:` lines with `script=` and `lang=`. Per English-mode control call: `language_mode=en`, `language=en-IN`, no `script=`.
 9. 🧑 **Latency** against English, with the tool you already use. Copy the latency files off the container first (they are lost on every deploy):

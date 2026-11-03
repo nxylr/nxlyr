@@ -1,0 +1,65 @@
+# H1 — Hindi in Devanagari, the 018 S1 steps in the same order. The caller says Hindi day, time and numbers on purpose;
+# every reply must say them back in English words (flags hindi_calendar, hindi_number)
+हाँ जी, बोलिए।
+मैं अपने परिवार के लिए घर देख रहा हूँ, मेरे भाई पास में ही रहते हैं, और मुझे पज़ेशन की डेट और लोकेशन पक्के तौर पर जाननी है
+मेरा बजट लगभग एक पॉइंट दो करोड़ है
+Meridian Heights के बारे में बताइए
+ये तो बहुत महँगा लग रहा है
+पेमेंट प्लान क्या है?
+क्या आप मुझे WhatsApp पर डिटेल्स भेज सकती हैं?
+क्या मैं शनिवार को सुबह ग्यारह बजे आ सकता हूँ?
+नहीं, शनिवार नहीं, रविवार को
+मुझे किसी असली इंसान से बात करनी है
+---
+# H2 — Hindi in Latin letters, as Deepgram may return it
+haan ji boliye
+mujhe 3 BHK dekhna hai Sector 79B ke aaspaas, family ke liye
+budget around two crore hai
+price kya hai aur possession kab milega?
+payment plan samjhaiye
+kya main Saturday ko eleven baje site visit kar sakta hoon?
+theek hai, thanks, bye
+---
+# H3 — code-switching inside one sentence, and an English opener
+Hi Aarya.
+Meridian Heights ka 3 BHK ka price क्या है?
+और possession कब तक मिलेगा?
+क्या वहाँ से Cyber City दूर है?
+मुझे इसके बारे में सोचना पड़ेगा, family से बात करके बताता हूँ
+bas itna hi, thank you
+---
+# H4 — English callers in hinglish mode (the 018 S1 lines; no Devanagari allowed in any reply)
+Hi Aarya.
+yes
+my budget is around one point two crore
+tell me about Meridian Heights
+that sounds expensive
+what's the payment plan?
+can you WhatsApp me the details?
+can I visit on Saturday at 11 am?
+can I talk to a real person?
+---
+# H5 — the caller changes language and asks for one
+tell me about the 3 BHK
+अच्छा, और पज़ेशन कब मिलेगा?
+okay, and the price?
+Hindi mein hi bataiye
+actually English is fine
+---
+# H6 — short pings, identity, disclosure
+हेलो?
+आप कौन बोल रही हैं?
+कौन सी कंपनी से?
+क्या आप रोबोट हैं?
+क्या आप सच में इंसान हैं?
+---
+# H7 — unclear, cut off, and an amount with no unit
+वो... मतलब... हाँ
+मेरा बजट दो है
+मेरा बजट अस्सी लाख है
+---
+# H8 — Hindi relative day, month, date, time and number words from the caller; the reply must use English words for all of them
+कल शाम पाँच बजे आ सकता हूँ?
+नहीं, परसों सुबह दस बजे
+पंद्रह नवंबर को चलेगा?
+तीन BHK में कितने बेडरूम हैं?

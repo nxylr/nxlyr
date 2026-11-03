@@ -27,7 +27,9 @@ class FakeCompletions:
     async def create(self, **kwargs):
         self.histories.append([dict(message) for message in kwargs["messages"]])
         message = SimpleNamespace(content=next(self.replies), tool_calls=None)
-        return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=message, finish_reason="stop")]
+        )
 
 
 class FakeClient:
@@ -299,6 +301,300 @@ class PromptHarnessTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             partial[-1]["content"], " ".join(full[-1]["content"].split()[:6])
         )
+
+    async def test_l11_hinglish_flags_have_true_and_false_cases(self) -> None:
+        flag = prompt_harness.reply_flags
+
+        for text in ("मैं बता सकता हूँ।", "मैं कर रहा हूँ।", "मैं करूँगा।", "मैं समझ गया।"):
+            with self.subTest(flag="masc_verb", text=text):
+                self.assertTrue(
+                    flag(text, "बताइए", 1, language_mode="hinglish")["masc_verb"]
+                )
+        for text in ("मैं बता सकती हूँ।", "मैं कर रही हूँ।", "मैं करूँगी।", "मैं समझ गई।"):
+            with self.subTest(flag="masc_verb_clean", text=text):
+                self.assertFalse(
+                    flag(text, "मैं देख रहा हूँ", 1, language_mode="hinglish")["masc_verb"]
+                )
+
+        cases = (
+            ("digits", "कीमत 2 crore है।", "कीमत two crore है।"),
+            ("wrong_script", "price two crore hai।", "price two crore है।"),
+            ("wrong_script", "साइट विज़िट available है।", "site visit available है।"),
+            ("english_to_hindi", "The project is in Gurugram.", "यह project Gurugram में है।"),
+            ("hindi_to_english", "यह project यहाँ है।", "The project is here."),
+            ("no_final_punct", "यह project यहाँ है", "यह project यहाँ है।"),
+            ("hindi_calendar", "शनिवार को आइए।", "Saturday को आइए।"),
+            ("hindi_number", "दो BHK उपलब्ध हैं।", "three BHK उपलब्ध हैं।"),
+        )
+        callers = {
+            "english_to_hindi": "मुझे बताइए",
+            "hindi_to_english": "tell me about it",
+        }
+        for name, bad, good in cases:
+            caller = callers.get(name, "मुझे बताइए")
+            with self.subTest(flag=name, result=True):
+                self.assertTrue(
+                    flag(bad, caller, 1, language_mode="hinglish")[name]
+                )
+            with self.subTest(flag=name, result=False):
+                self.assertFalse(
+                    flag(good, caller, 1, language_mode="hinglish")[name]
+                )
+
+        kb_text = json.dumps(prompt_harness.load_harness_kb(None), ensure_ascii=False)
+        self.assertTrue(
+            flag(
+                "कीमत two point three crore rupees है।",
+                "price?",
+                1,
+                language_mode="hinglish",
+                kb_text=kb_text,
+            )["figure_not_in_kb"]
+        )
+        self.assertFalse(
+            flag(
+                "कीमत two point two crore है।",
+                "price?",
+                1,
+                language_mode="hinglish",
+                kb_text=kb_text,
+            )["figure_not_in_kb"]
+        )
+        self.assertTrue(
+            flag(
+                "यह वाक्य अधूरा है",
+                "बताइए",
+                1,
+                language_mode="hinglish",
+                finish_reason="length",
+            )["truncated"]
+        )
+        self.assertFalse(
+            flag(
+                "यह वाक्य पूरा है।",
+                "बताइए",
+                1,
+                language_mode="hinglish",
+                finish_reason="stop",
+            )["truncated"]
+        )
+
+    async def test_r1_f3_figure_runs_stop_at_hindi_and_punctuation(self) -> None:
+        kb = prompt_harness.load_harness_kb(None)
+        kb_text = json.dumps(kb, ensure_ascii=False)
+        cases = (
+            "तीन BHK में कीमत two point two crore rupees से शुरू होती है।",
+            "Starts at two point two crore rupees, three BHK available.",
+            "three BHK में two point two crore rupees मिलते हैं।",
+        )
+        for text in cases:
+            with self.subTest(text=text):
+                self.assertFalse(prompt_harness._figure_not_in_kb(text, kb_text))
+        self.assertTrue(
+            prompt_harness._figure_not_in_kb(
+                "कीमत two point five crore rupees है।", kb_text
+            )
+        )
+
+    async def test_r1_f3_every_harness_spoken_sentence_matches_its_kb(self) -> None:
+        kb = prompt_harness.load_harness_kb(None)
+        kb_text = json.dumps(kb, ensure_ascii=False)
+        spoken = [
+            value["spoken"]
+            for value in kb.values()
+            if isinstance(value, dict) and "spoken" in value
+        ]
+        spoken.extend(
+            unit["spoken"] for unit in kb["unit_types"] if "spoken" in unit
+        )
+        self.assertEqual(len(spoken), 6)
+        for sentence in spoken:
+            with self.subTest(sentence=sentence):
+                self.assertFalse(
+                    prompt_harness._figure_not_in_kb(sentence, kb_text)
+                )
+
+    async def test_r1_minor_nfd_normalises_both_sides_of_devanagari_matches(self) -> None:
+        flag = prompt_harness.reply_flags
+        for spelling in ("फ़रवरी", "\u095eरवरी"):
+            with self.subTest(calendar=spelling):
+                self.assertTrue(
+                    flag(
+                        f"{spelling} में आइए।",
+                        "बताइए",
+                        1,
+                        language_mode="hinglish",
+                    )["hindi_calendar"]
+                )
+        for spelling in ("हज़ार", "ह\u095bार", "करोड़", "करो\u095c"):
+            with self.subTest(number=spelling):
+                self.assertTrue(
+                    flag(
+                        f"कीमत {spelling} rupees है।",
+                        "बताइए",
+                        1,
+                        language_mode="hinglish",
+                    )["hindi_number"]
+                )
+
+    async def test_r2_missing_hindi_number_spellings_are_flagged(self) -> None:
+        for spelling in ("चौवालीस", "उन्यासी", "सत्तासी"):
+            with self.subTest(spelling=spelling):
+                self.assertTrue(
+                    prompt_harness.reply_flags(
+                        f"{spelling} lakh rupees।",
+                        "बताइए",
+                        1,
+                        language_mode="hinglish",
+                    )["hindi_number"]
+                )
+
+    async def test_l11_claim_patterns_cover_english_and_hindi_without_substrings(self) -> None:
+        flag = prompt_harness.reply_flags
+        for claim in (
+            "Your visit is set for Thursday.",
+            "Your visit is fixed for Thursday.",
+            "Your visit is scheduled for Thursday.",
+            "आपकी visit बुक कर दी।",
+            "आपकी visit सेट कर दी।",
+            "आपकी visit बुक हो गई है।",
+            "आपकी visit सेट कर दिया।",
+            "आपकी request आगे बढ़ा दी।",
+            "आपका समय नोट हो गया।",
+        ):
+            with self.subTest(claim=claim):
+                self.assertTrue(flag(claim, "Thursday", 1)["claimed_without_tool"])
+                self.assertFalse(
+                    flag(claim, "Thursday", 1, function_called=True)[
+                        "claimed_without_tool"
+                    ]
+                )
+        for clean in (
+            "Please reset for Thursday.",
+            "That schedule is for Thursday.",
+            "Thursday could work.",
+            "आप बुक कर दीजिए।",
+            "मैं पक्का करना चाहूँगी।",
+            "क्या आप कन्फ़र्म करना चाहेंगे?",
+        ):
+            with self.subTest(clean=clean):
+                self.assertFalse(flag(clean, "Thursday", 1)["claimed_without_tool"])
+
+    async def test_l11_hindi_timing_and_generic_closer_are_flagged(self) -> None:
+        flags = prompt_harness.reply_flags(
+            "मैं अभी तुरंत बताती हूँ। और कुछ जानना चाहेंगे?",
+            "बताइए",
+            1,
+            language_mode="hinglish",
+        )
+        self.assertTrue(flags["timing_word"])
+        self.assertTrue(flags["generic_closer"])
+
+    async def test_l11_stream_finish_reason_length_is_recorded(self) -> None:
+        chunks = [
+            SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        delta=SimpleNamespace(content="अधूरा जवाब", tool_calls=[]),
+                        finish_reason=None,
+                    )
+                ]
+            ),
+            SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        delta=SimpleNamespace(content=None, tool_calls=[]),
+                        finish_reason="length",
+                    )
+                ]
+            ),
+        ]
+
+        class FakeStream:
+            def __aiter__(self):
+                self.items = iter(chunks)
+                return self
+
+            async def __anext__(self):
+                try:
+                    return next(self.items)
+                except StopIteration as error:
+                    raise StopAsyncIteration from error
+
+        client = SimpleNamespace(
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(
+                    create=AsyncMock(return_value=FakeStream())
+                )
+            )
+        )
+        result = await prompt_harness.get_reply(
+            client,
+            [{"role": "user", "content": "बताइए"}],
+            timing=True,
+        )
+        self.assertEqual(result.finish_reason, "length")
+        self.assertEqual(result.message.content, "अधूरा जवाब")
+
+    async def test_l12_english_summary_stays_byte_identical_and_devanagari_counts_spaces(self) -> None:
+        stats = prompt_harness.HarnessStats()
+        text = "The project is in Gurugram."
+        stats.add(text, prompt_harness.reply_flags(text, "where?", 1), run_id=1)
+        self.assertEqual(
+            stats.render_summary(),
+            "[summary]\n"
+            "replies=1 p50_first_sentence_words=5 p50_first_sentence_ms=0\n"
+            "reintro=0 banned=0 didyoumean=0 digits=0 tag_in_reply=0 two_questions=0 over45=0 claimed_without_tool=0 generic_closer=0 timing_word=0\n"
+            "replies_with_two_questions=0 repeated_sentences=0 replies_over_45=0\n"
+            "connective_share=0.000 connectives=0 connective_counts={} process_phrases=0\n"
+            "ending_in_question=0/1",
+        )
+        flags = prompt_harness.reply_flags(
+            "जी, यह project यहाँ उपलब्ध है।",
+            "बताइए",
+            1,
+            language_mode="hinglish",
+        )
+        self.assertEqual(flags["first_sentence_words"], 6)
+
+        hinglish_stats = prompt_harness.HarnessStats(language_mode="hinglish")
+        hinglish_stats.add(
+            "यह उत्तर पूरा है।",
+            prompt_harness.reply_flags(
+                "यह उत्तर पूरा है।",
+                "बताइए",
+                1,
+                language_mode="hinglish",
+            ),
+            run_id=1,
+        )
+        self.assertRegex(
+            hinglish_stats.render_summary().splitlines()[-1],
+            r"^masc_verb=0 digits=0 .* truncated=0$",
+        )
+
+        script = AGENT_DIR / "prompt_scripts" / "hinglish_v21.txt"
+        scenarios = prompt_harness.parse_script(script)
+        self.assertEqual(len(scenarios), 8)
+        self.assertTrue(all(scenarios))
+
+    async def test_l12_hinglish_seed_adds_language_block_but_keeps_greeting(self) -> None:
+        kb = {"project_name": "Meridian Heights"}
+        english = prompt_harness.seed_history(
+            kb,
+            "v21",
+            partial_greeting=False,
+            language_mode="en",
+        )
+        hinglish = prompt_harness.seed_history(
+            kb,
+            "v21",
+            partial_greeting=False,
+            language_mode="hinglish",
+        )
+        self.assertNotIn("[LANGUAGE]", english[0]["content"])
+        self.assertTrue(hinglish[0]["content"].endswith(prompt_harness.HINGLISH_ADDENDUM))
+        self.assertEqual(english[-1], hinglish[-1])
 
 
 if __name__ == "__main__":

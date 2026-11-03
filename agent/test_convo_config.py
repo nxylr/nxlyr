@@ -17,6 +17,7 @@ if str(AGENT_DIR) not in sys.path:
 
 import convo_config
 import log_scrub
+from prompt import HINGLISH_ADDENDUM
 
 with patch("dotenv.load_dotenv"):
     import bot
@@ -30,6 +31,7 @@ DEFAULTS = {
     "stt_numerals": False,
     "stt_region": "global",
     "greeting_tags": False,
+    "language_mode": "en",
 }
 
 
@@ -136,7 +138,7 @@ async def run_wired_bot(
         stack.enter_context(patch.object(bot, "read_convo_config", new=AsyncMock(return_value=config)))
         stack.enter_context(patch.object(bot, "read_override", new=AsyncMock(return_value=voice_override)))
         stt = stack.enter_context(patch.object(bot, "STTCheckingDeepgramService"))
-        stack.enter_context(patch.object(bot, "OpenAILLMService"))
+        llm = stack.enter_context(patch.object(bot, "OpenAILLMService"))
         stack.enter_context(patch.object(bot.aiohttp, "ClientSession", FakeClientSession))
         stack.enter_context(patch.object(bot, "ElevenLabsHttpTTSService"))
         messages = stack.enter_context(patch.object(bot, "build_initial_messages", wraps=bot.build_initial_messages))
@@ -157,6 +159,7 @@ async def run_wired_bot(
     return SimpleNamespace(
         frame=worker_box["worker"].queued_frames[0],
         stt=stt,
+        llm=llm,
         messages=messages,
         context=context,
         info=info,
@@ -185,6 +188,7 @@ class ConvoConfigTests(unittest.IsolatedAsyncioTestCase):
             "stt_numerals": "on",
             "stt_region": " EU ",
             "greeting_tags": "On",
+            "language_mode": " Hinglish ",
         }
         config = convo_config.parse(raw)
         self.assertEqual(config.prompt_version, "v21")
@@ -192,6 +196,7 @@ class ConvoConfigTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(config.stt_numerals)
         self.assertEqual(config.stt_region, "eu")
         self.assertTrue(config.greeting_tags)
+        self.assertEqual(config.language_mode, "hinglish")
         self.assertEqual(config.overrides, tuple(raw))
 
     async def test_c03_invalid_values_warn_once_and_fall_back_without_echoing_long_input(self) -> None:
@@ -201,6 +206,7 @@ class ConvoConfigTests(unittest.IsolatedAsyncioTestCase):
             "stt_numerals": ("yes", ""),
             "stt_region": ("EU-west", ""),
             "greeting_tags": ("yes", ""),
+            "language_mode": ("Hindi", "", "hinglish,en"),
         }
         for field, values in cases.items():
             for value in values:
@@ -213,7 +219,7 @@ class ConvoConfigTests(unittest.IsolatedAsyncioTestCase):
                     warning.assert_called_once()
                     rendered = " ".join(str(part) for part in warning.call_args.args)
                     self.assertIn(field, rendered)
-                    if len(value) > 100:
+                    if value and (field == "language_mode" or len(value) > 100):
                         self.assertNotIn(value, rendered)
 
     async def test_c04_unknown_field_warns_and_changes_nothing(self) -> None:
@@ -294,7 +300,8 @@ class ConvoConfigTests(unittest.IsolatedAsyncioTestCase):
             line,
             r"^convo config: conn=(?:[0-9a-f]{6}|-) prompt_version=\S+ "
             r"stt_keyterms=\S+ stt_numerals=\S+ stt_region=\S+ "
-            r"greeting_tags=\S+ read_ms=\d+ overrides=\S+$",
+            r"greeting_tags=\S+ language_mode=(?:en|hinglish) "
+            r"read_ms=\d+ overrides=\S+$",
         )
         self.assertNotIn(secret_url, line)
         self.assertNotIn(secret_key, line)
@@ -349,6 +356,42 @@ class ConvoConfigTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(is_given(settings.keyterm))
         self.assertFalse(is_given(settings.numerals))
         self.assertEqual(kwargs["region"], "global")
+        self.assertFalse(kwargs["hinglish"])
+        self.assertEqual(
+            result.messages.call_args.kwargs.get("language_mode", "en"),
+            "en",
+        )
+        self.assertEqual(
+            result.llm.Settings.call_args.kwargs["max_tokens"],
+            bot.LLM_MAX_TOKENS,
+        )
+
+    async def test_g01_en_and_unset_are_identical_call_settings(self) -> None:
+        unset = await run_wired_bot(convo_config.parse({}))
+        explicit = await run_wired_bot(convo_config.parse({"language_mode": "en"}))
+
+        def snapshot(result):
+            stt_kwargs = result.stt.call_args.kwargs
+            settings = stt_kwargs["settings"]
+            return {
+                "stt": {
+                    "model": settings.model,
+                    "language": str(settings.language),
+                    "smart_format": settings.smart_format,
+                    "interim_results": settings.interim_results,
+                    "endpointing": settings.endpointing,
+                    "keyterm_given": is_given(settings.keyterm),
+                    "numerals_given": is_given(settings.numerals),
+                    "region": stt_kwargs["region"],
+                    "base_url": stt_kwargs.get("base_url"),
+                    "hinglish": stt_kwargs["hinglish"],
+                },
+                "messages": result.context.call_args.kwargs["messages"],
+                "greeting": result.frame.text,
+                "max_tokens": result.llm.Settings.call_args.kwargs["max_tokens"],
+            }
+
+        self.assertEqual(snapshot(unset), snapshot(explicit))
 
     async def test_g02_tags_on_flash_warns_blocks_and_queues_plain_greeting(self) -> None:
         config = convo_config.parse({"greeting_tags": "on"})
@@ -381,14 +424,49 @@ class ConvoConfigTests(unittest.IsolatedAsyncioTestCase):
                     convo_config.parse({"prompt_version": version})
                 )
                 self.assertEqual(result.messages.call_args.kwargs["version"], version)
+                self.assertEqual(
+                    result.messages.call_args.kwargs.get("language_mode", "en"), "en"
+                )
                 lines = [str(call.args[0]) for call in result.info.call_args_list]
                 prompt_line = next(line for line in lines if line.startswith("prompt v2:"))
                 self.assertRegex(
                     prompt_line,
                     r"^prompt v2: chars=\d+ lead_source=demo_form "
-                    r"disclosure_mode=\S+ company=\S+ version=\S+$",
+                    r"disclosure_mode=\S+ company=\S+ version=\S+ "
+                    r"language_mode=en$",
                 )
-                self.assertTrue(prompt_line.endswith(f"version={version}"))
+                self.assertIn(f"version={version} ", prompt_line)
+
+    async def test_g04_hinglish_wires_multi_prompt_and_existing_stt_options(self) -> None:
+        config = convo_config.parse(
+            {
+                "language_mode": "hinglish",
+                "stt_keyterms": "on",
+                "stt_numerals": "on",
+                "stt_region": "eu",
+            }
+        )
+        result = await run_wired_bot(config)
+        kwargs = result.stt.call_args.kwargs
+        settings = kwargs["settings"]
+        self.assertEqual(str(settings.language), "multi")
+        self.assertEqual(settings.endpointing, 300)
+        self.assertTrue(settings.smart_format)
+        self.assertTrue(settings.interim_results)
+        self.assertTrue(is_given(settings.keyterm))
+        self.assertTrue(settings.numerals)
+        self.assertEqual(kwargs["base_url"], "api.eu.deepgram.com")
+        self.assertEqual(kwargs["region"], "eu")
+        self.assertTrue(kwargs["hinglish"])
+        self.assertEqual(
+            result.messages.call_args.kwargs["language_mode"], "hinglish"
+        )
+        messages = result.context.call_args.kwargs["messages"]
+        self.assertTrue(messages[0]["content"].endswith(HINGLISH_ADDENDUM))
+        self.assertEqual(
+            messages[-1]["content"],
+            bot.build_greeting(bot.LEAD_SOURCE_DEMO_FORM, "Test Heights"),
+        )
 
     async def test_g05_exactly_one_config_line_is_logged_per_call(self) -> None:
         result = await run_wired_bot(convo_config.ConvoConfig())

@@ -20,6 +20,7 @@ _ALLOWED = {
     "stt_numerals": {"on", "off"},
     "stt_region": {"global", "eu"},
     "greeting_tags": {"on", "off"},
+    "language_mode": {"en", "hinglish"},
 }
 _DEFAULT_RAW = {
     "prompt_version": "v2",
@@ -27,6 +28,7 @@ _DEFAULT_RAW = {
     "stt_numerals": "off",
     "stt_region": "global",
     "greeting_tags": "off",
+    "language_mode": "en",
 }
 
 
@@ -37,6 +39,7 @@ class ConvoConfig:
     stt_numerals: bool = False
     stt_region: str = "global"
     greeting_tags: bool = False
+    language_mode: str = "en"
     overrides: tuple[str, ...] = ()
     read_ms: int = 0
     overrides_available: bool = True
@@ -88,6 +91,7 @@ def parse(
         stt_numerals=parsed["stt_numerals"] == "on",
         stt_region=parsed["stt_region"],
         greeting_tags=parsed["greeting_tags"] == "on",
+        language_mode=parsed["language_mode"],
         overrides=tuple(overrides),
         read_ms=max(0, int(read_ms)),
         overrides_available=overrides_available,
@@ -152,5 +156,6 @@ def log_line(
         f"stt_keyterms={'on' if config.stt_keyterms else 'off'} "
         f"stt_numerals={'on' if config.stt_numerals else 'off'} "
         f"stt_region={config.stt_region} greeting_tags={greeting_tags} "
+        f"language_mode={config.language_mode} "
         f"read_ms={config.read_ms} overrides={overrides}"
     )
