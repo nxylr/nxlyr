@@ -26,3 +26,6 @@ Full records in `docs/adr/`. One line each; newest last.
 - 2026-10-27: A correction on the same call supersedes the earlier booking row (kept, `superseded_at` set) and sends an "Updated booking" alert; one live row per call.
 - 2026-10-27: **Founder decision: the beachhead is Gurugram residential developers.** Next work follows the Gurugram plan in `hot.md`.
 - 2026-10-27: Numerals are not forced on Deepgram (`stt_numerals` stays off): its formatting already gives digits (per the founder, 018 exit test).
+- 2026-11-03: Smart barge-in (`bargein_mode=smart`) and Hinglish (`language_mode=hinglish`) go live through `convo:config`, not by changing the code defaults, which stay `legacy` and `en`. Rollback is `DEL convo:config` or setting the field back, no deploy. (Specs 022 and 021; the live values are per the founder, not verified by an agent.)
+- 2026-11-03: Hinglish runs Deepgram `language=multi` and degrades on a rejected connection in a fixed order: global host with key terms, global without key terms, `en-IN`. Only HTTP 4xx other than 401, 403 and 429 triggers a step; auth and rate-limit failures retry and never fall back (spec 021).
+- 2026-11-03: Finding a more Indian-sounding voice is parked: v4 ignored the accent tag and `language_code` on the current voice (voice id in `hot.md`).
